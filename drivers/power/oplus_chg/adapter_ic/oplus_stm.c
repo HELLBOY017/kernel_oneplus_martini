@@ -1,4 +1,4 @@
-
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2018-2020 Oplus. All rights reserved.
  */
@@ -19,31 +19,28 @@
 #include "oplus_stm.h"
 #include "../oplus_charger.h"
 #include "../oplus_adapter.h"
-#ifdef OPLUS_CHG_OP_DEF
-#include "../oplus_chg_module.h"
-#endif
 
 static struct chip_stm *the_chip = NULL;
 
-static void warp_uart_gpio_set_value(unsigned long pin, bool value)
+static void vooc_uart_gpio_set_value(unsigned long pin, bool value)
 {
 	gpio_set_value(pin, value);
 }
 
-static int warp_uart_gpio_get_value(unsigned long pin)
+static int vooc_uart_gpio_get_value(unsigned long pin)
 {
         return gpio_get_value(pin);
 }
 
-static void warp_uart_tx_bit(unsigned char tx_data)
+static void vooc_uart_tx_bit(unsigned char tx_data)
 {
         static unsigned char tx_bit = BIT_START;
 		struct chip_stm *chip = the_chip;
-
+		
         switch (tx_bit) {
         case BIT_START:
                 chip->tx_byte_over = false;
-                warp_uart_gpio_set_value(chip->uart_tx_gpio, 0);
+                vooc_uart_gpio_set_value(chip->uart_tx_gpio, 0);
                 tx_bit = BIT_0;
                 break;
         case BIT_0:
@@ -55,15 +52,15 @@ static void warp_uart_tx_bit(unsigned char tx_data)
         case BIT_6:
         case BIT_7:
                 if (tx_data & (1 << tx_bit)) {
-                        warp_uart_gpio_set_value(chip->uart_tx_gpio, 1);
+                        vooc_uart_gpio_set_value(chip->uart_tx_gpio, 1);
                 } else {
-                        warp_uart_gpio_set_value(chip->uart_tx_gpio, 0);
+                        vooc_uart_gpio_set_value(chip->uart_tx_gpio, 0);
                 }
                 tx_bit++;
                 break;
         case BIT_STOP:
         case BIT_IDLE:
-                warp_uart_gpio_set_value(chip->uart_tx_gpio, 1);
+                vooc_uart_gpio_set_value(chip->uart_tx_gpio, 1);
                 tx_bit = BIT_START;
                 chip->tx_byte_over = true;
                 break;
@@ -72,15 +69,15 @@ static void warp_uart_tx_bit(unsigned char tx_data)
         }
 }
 
-static int warp_uart_rx_bit(void)
+static int vooc_uart_rx_bit(void)
 {
         static unsigned char rx_bit = BIT_IDLE, rx_val = 0;
 		struct chip_stm *chip = the_chip;
-
+		
         switch (rx_bit) {
         case BIT_IDLE:
                 chip->rx_byte_over = false;
-                if (!warp_uart_gpio_get_value(chip->uart_rx_gpio)) {
+                if (!vooc_uart_gpio_get_value(chip->uart_rx_gpio)) {
                         rx_bit = BIT_0;
                         chip->timer_delay = 75;        /*1.5 cycle*/
                 } else {
@@ -96,7 +93,7 @@ static int warp_uart_rx_bit(void)
         case BIT_6:
         case BIT_7:
                 chip->timer_delay = 50;        /* 1 cycle*/
-                if (warp_uart_gpio_get_value(chip->uart_rx_gpio)) {
+                if (vooc_uart_gpio_get_value(chip->uart_rx_gpio)) {
                         rx_val |= (1 << rx_bit);
                 } else {
                         rx_val &= ~(1 << rx_bit);
@@ -113,13 +110,13 @@ static int warp_uart_rx_bit(void)
         return rx_val;
 }
 
-static void warp_uart_tx_byte(unsigned char tx_data)
+static void vooc_uart_tx_byte(unsigned char tx_data)
 {
 		struct chip_stm *chip = the_chip;
 
 		chip->timer_delay = 51;
         while (1) {
-                warp_uart_tx_bit(tx_data);
+                vooc_uart_tx_bit(tx_data);
                 udelay(chip->timer_delay);
                 if (chip->tx_byte_over) {
                         chip->timer_delay = 25;
@@ -128,13 +125,13 @@ static void warp_uart_tx_byte(unsigned char tx_data)
         }
 }
 
-static unsigned char warp_uart_rx_byte(unsigned int cmd)
+static unsigned char vooc_uart_rx_byte(unsigned int cmd)
 {
         unsigned char rx_val = 0;
         unsigned int count = 0;
         unsigned int max_count = 0;
 		struct chip_stm *chip = the_chip;
-
+		
         if (cmd == Read_Addr_Line_Cmd) {
                 max_count = Read_Addr_Line_Cmd_Count;
         } else if (cmd == Write_Addr_Line_Cmd) {
@@ -153,7 +150,7 @@ static unsigned char warp_uart_rx_byte(unsigned int cmd)
         chip->rx_timeout = false;
         chip->timer_delay = 25;
         while (1) {
-                rx_val = warp_uart_rx_bit();
+                rx_val = vooc_uart_rx_bit();
                 udelay(chip->timer_delay);
                 if (chip->rx_byte_over) {
                         return rx_val;
@@ -166,7 +163,7 @@ static unsigned char warp_uart_rx_byte(unsigned int cmd)
         }
 }
 
-static void warp_uart_irq_fiq_enable(bool enable)
+static void vooc_uart_irq_fiq_enable(bool enable)
 {
 #if 0
         if (enable) {
@@ -181,53 +178,53 @@ static void warp_uart_irq_fiq_enable(bool enable)
         #endif
 }
 
-static int warp_uart_write_some_addr(u8 *fw_buf, int length)
+static int vooc_uart_write_some_addr(u8 *fw_buf, int length)
 {
         unsigned int write_addr = 0, i = 0, fw_count = 0;
         unsigned char rx_val = 0;
 		struct chip_stm *chip = the_chip;
-
+		
         while (1) {
                 /*cmd(2 bytes) + count(1 byte) + addr(2 bytes) + data(16 bytes)*/
                 /*tx: 0xF5*/
-                warp_uart_irq_fiq_enable(false);
-                warp_uart_tx_byte((Write_Addr_Line_Cmd >> 8) & 0xff);
-                warp_uart_irq_fiq_enable(true);
+                vooc_uart_irq_fiq_enable(false);
+                vooc_uart_tx_byte((Write_Addr_Line_Cmd >> 8) & 0xff);
+                vooc_uart_irq_fiq_enable(true);
 
                 /*tx: 0x02*/
-                warp_uart_irq_fiq_enable(false);
-                warp_uart_tx_byte(Write_Addr_Line_Cmd & 0xff);
-                warp_uart_irq_fiq_enable(true);
+                vooc_uart_irq_fiq_enable(false);
+                vooc_uart_tx_byte(Write_Addr_Line_Cmd & 0xff);
+                vooc_uart_irq_fiq_enable(true);
 
                 /*count:16 bytes*/
-                warp_uart_irq_fiq_enable(false);
-                warp_uart_tx_byte(16);
-                warp_uart_irq_fiq_enable(true);
+                vooc_uart_irq_fiq_enable(false);
+                vooc_uart_tx_byte(16);
+                vooc_uart_irq_fiq_enable(true);
 
                 /*addr: 2 byte*/
                 if (write_addr == 0) {
                         write_addr = (fw_buf[fw_count + 1] << 8) | fw_buf[fw_count];
                 }
-                warp_uart_irq_fiq_enable(false);
-                warp_uart_tx_byte((write_addr >> 8) & 0xff);
-                warp_uart_irq_fiq_enable(true);
+                vooc_uart_irq_fiq_enable(false);
+                vooc_uart_tx_byte((write_addr >> 8) & 0xff);
+                vooc_uart_irq_fiq_enable(true);
 
-                warp_uart_irq_fiq_enable(false);
-                warp_uart_tx_byte(write_addr & 0xff);
-                warp_uart_irq_fiq_enable(true);
+                vooc_uart_irq_fiq_enable(false);
+                vooc_uart_tx_byte(write_addr & 0xff);
+                vooc_uart_irq_fiq_enable(true);
 
                 if (!(write_addr % 0x20)) {
                         fw_count += 2;
                 }
                 /*data: 16 bytes*/
                 for (i = 0;i < 16;i++) {
-                        warp_uart_irq_fiq_enable(false);
-                        warp_uart_tx_byte(fw_buf[fw_count]);
+                        vooc_uart_irq_fiq_enable(false);
+                        vooc_uart_tx_byte(fw_buf[fw_count]);
                         fw_count++;
                         if (i == 15) {
-                                rx_val = warp_uart_rx_byte(Write_Addr_Line_Cmd);
+                                rx_val = vooc_uart_rx_byte(Write_Addr_Line_Cmd);
                         }
-                        warp_uart_irq_fiq_enable(true);
+                        vooc_uart_irq_fiq_enable(true);
                 }
                 write_addr += 16;
                 if (rx_val != UART_ACK || chip->rx_timeout) {
@@ -244,7 +241,7 @@ static int warp_uart_write_some_addr(u8 *fw_buf, int length)
 #define STM8S_ADAPTER_LAST_ADDR                 0x9FEF
 #define HALF_ONE_LINE                           16
 
-static bool warp_uart_read_addr_line_and_check(unsigned int addr)
+static bool vooc_uart_read_addr_line_and_check(unsigned int addr)
 {
         unsigned char fw_check_buf[20] = {0x00};
         int i = 0;
@@ -252,36 +249,36 @@ static bool warp_uart_read_addr_line_and_check(unsigned int addr)
         bool check_result = false;
         int addr_check_err = 0;
 		struct chip_stm *chip = the_chip;
-
+		
         if (addr == STM8S_ADAPTER_FIRST_ADDR) {
                 fw_line = 0;
         }
         /*Tx_Read_Addr_Line */
         /*tx:0xF5*/
-        warp_uart_irq_fiq_enable(false);
-        warp_uart_tx_byte((Read_Addr_Line_Cmd >> 8) & 0xff);
-        warp_uart_irq_fiq_enable(true);
+        vooc_uart_irq_fiq_enable(false);
+        vooc_uart_tx_byte((Read_Addr_Line_Cmd >> 8) & 0xff);
+        vooc_uart_irq_fiq_enable(true);
 
         /*tx:0x01*/
-        warp_uart_irq_fiq_enable(false);
-        warp_uart_tx_byte(Read_Addr_Line_Cmd & 0xff);
-        warp_uart_irq_fiq_enable(true);
+        vooc_uart_irq_fiq_enable(false);
+        vooc_uart_tx_byte(Read_Addr_Line_Cmd & 0xff);
+        vooc_uart_irq_fiq_enable(true);
 
         /*tx:0x9F*/
-        warp_uart_irq_fiq_enable(false);
-        warp_uart_tx_byte((addr >> 8) & 0xff);
-        warp_uart_irq_fiq_enable(true);
+        vooc_uart_irq_fiq_enable(false);
+        vooc_uart_tx_byte((addr >> 8) & 0xff);
+        vooc_uart_irq_fiq_enable(true);
 
         /*tx:0xF0*/
-        warp_uart_irq_fiq_enable(false);
-        warp_uart_tx_byte(addr & 0xff);
+        vooc_uart_irq_fiq_enable(false);
+        vooc_uart_tx_byte(addr & 0xff);
 
         /*addr(2 bytes) + data(16 bytes)*/
-        fw_check_buf[0] = warp_uart_rx_byte(Read_Addr_Line_Cmd);
+        fw_check_buf[0] = vooc_uart_rx_byte(Read_Addr_Line_Cmd);
         if (chip->rx_timeout) {
                 goto  read_addr_line_err;
         }
-        fw_check_buf[1] = warp_uart_rx_byte(Read_Addr_Line_Cmd);
+        fw_check_buf[1] = vooc_uart_rx_byte(Read_Addr_Line_Cmd);
         if (chip->rx_timeout) {
                 goto  read_addr_line_err;
         }
@@ -290,7 +287,7 @@ static bool warp_uart_read_addr_line_and_check(unsigned int addr)
                 goto read_addr_line_err;
         }
         for (i = 0; i < 16;i++) {
-                fw_check_buf[i + 2] = warp_uart_rx_byte(Read_Addr_Line_Cmd);
+                fw_check_buf[i + 2] = vooc_uart_rx_byte(Read_Addr_Line_Cmd);
                 if (chip->rx_timeout) {
                         goto  read_addr_line_err;
                 }
@@ -316,7 +313,7 @@ static bool warp_uart_read_addr_line_and_check(unsigned int addr)
         }
         check_result = true;
 read_addr_line_err:
-        warp_uart_irq_fiq_enable(true);
+        vooc_uart_irq_fiq_enable(true);
         if (addr_check_err) {
                 chg_debug(" addr:0x%x, buf[0]:0x%x, buf[1]:0x%x\n", addr, fw_check_buf[0], fw_check_buf[1]);
         }
@@ -328,14 +325,14 @@ read_addr_line_err:
         return check_result;
 }
 
-static int warp_uart_read_front_addr_and_check(void)
+static int vooc_uart_read_front_addr_and_check(void)
 {
         unsigned int read_addr = STM8S_ADAPTER_FIRST_ADDR;
         bool result = false;
 		struct chip_stm *chip = the_chip;
 
         while (read_addr < STM8S_ADAPTER_LAST_ADDR) {
-                result = warp_uart_read_addr_line_and_check(read_addr);
+                result = vooc_uart_read_addr_line_and_check(read_addr);
                 read_addr = read_addr + 16;
                 if ((!result) || chip->rx_timeout) {
                         chg_err(" result:%d, chip->rx_timeout:%d\n", result, chip->rx_timeout);
@@ -345,41 +342,41 @@ static int warp_uart_read_front_addr_and_check(void)
         return 0;
 }
 
-static bool warp_adapter_update_handle(unsigned long tx_pin, unsigned long rx_pin)
+static bool vooc_adapter_update_handle(unsigned long tx_pin, unsigned long rx_pin)
 {
         unsigned char rx_val = 0;
         int rx_last_line_count = 0;
         unsigned char rx_last_line[18] = {0x0};
         int rc = 0;
 		struct chip_stm *chip = the_chip;
-
+		
         chg_debug(" begin\n");
         chip->uart_tx_gpio = tx_pin;
         chip->uart_rx_gpio = rx_pin;
-
+	
         chip->adapter_update_ing = true;
         chip->rx_timeout = false;
 /*step1: Tx_Erase_Addr_Line*/
         /*tx:0xF5*/
-        warp_uart_irq_fiq_enable(false);
-        warp_uart_tx_byte((Erase_Addr_Line_Cmd >> 8) & 0xff);
-        warp_uart_irq_fiq_enable(true);
+        vooc_uart_irq_fiq_enable(false);
+        vooc_uart_tx_byte((Erase_Addr_Line_Cmd >> 8) & 0xff);
+        vooc_uart_irq_fiq_enable(true);
 
         /*tx:0x03*/
-        warp_uart_irq_fiq_enable(false);
-        warp_uart_tx_byte(Erase_Addr_Line_Cmd & 0xff);
-        warp_uart_irq_fiq_enable(true);
+        vooc_uart_irq_fiq_enable(false);
+        vooc_uart_tx_byte(Erase_Addr_Line_Cmd & 0xff);
+        vooc_uart_irq_fiq_enable(true);
 
         /*tx:0x9F*/
-        warp_uart_irq_fiq_enable(false);
-        warp_uart_tx_byte((Last_Line_Addr >> 8) & 0xff);
-        warp_uart_irq_fiq_enable(true);
+        vooc_uart_irq_fiq_enable(false);
+        vooc_uart_tx_byte((Last_Line_Addr >> 8) & 0xff);
+        vooc_uart_irq_fiq_enable(true);
 
         /*tx:0xF0*/
-        warp_uart_irq_fiq_enable(false);
-        warp_uart_tx_byte(Last_Line_Addr & 0xff);
-        rx_val = warp_uart_rx_byte(Erase_Addr_Line_Cmd);
-        warp_uart_irq_fiq_enable(true);
+        vooc_uart_irq_fiq_enable(false);
+        vooc_uart_tx_byte(Last_Line_Addr & 0xff);
+        rx_val = vooc_uart_rx_byte(Erase_Addr_Line_Cmd);
+        vooc_uart_irq_fiq_enable(true);
         if (rx_val != UART_ACK || chip->rx_timeout) {
                 chg_err(" Tx_Erase_Addr_Line err, chip->rx_timeout:%d\n", chip->rx_timeout);
                 goto update_err;
@@ -387,30 +384,30 @@ static bool warp_adapter_update_handle(unsigned long tx_pin, unsigned long rx_pi
 
 /*Step2: Tx_Read_Addr_Line */
         /*tx:0xF5*/
-        warp_uart_irq_fiq_enable(false);
-        warp_uart_tx_byte((Read_Addr_Line_Cmd >> 8) & 0xff);
-        warp_uart_irq_fiq_enable(true);
+        vooc_uart_irq_fiq_enable(false);
+        vooc_uart_tx_byte((Read_Addr_Line_Cmd >> 8) & 0xff);
+        vooc_uart_irq_fiq_enable(true);
 
         /*tx:0x01*/
-        warp_uart_irq_fiq_enable(false);
-        warp_uart_tx_byte(Read_Addr_Line_Cmd & 0xff);
-        warp_uart_irq_fiq_enable(true);
+        vooc_uart_irq_fiq_enable(false);
+        vooc_uart_tx_byte(Read_Addr_Line_Cmd & 0xff);
+        vooc_uart_irq_fiq_enable(true);
 
         /*tx:0x9F*/
-        warp_uart_irq_fiq_enable(false);
-        warp_uart_tx_byte((Last_Line_Addr >> 8) & 0xff);
-        warp_uart_irq_fiq_enable(true);
+        vooc_uart_irq_fiq_enable(false);
+        vooc_uart_tx_byte((Last_Line_Addr >> 8) & 0xff);
+        vooc_uart_irq_fiq_enable(true);
 
         /*tx:0xF0*/
-        warp_uart_irq_fiq_enable(false);
-        warp_uart_tx_byte(Last_Line_Addr & 0xff);
+        vooc_uart_irq_fiq_enable(false);
+        vooc_uart_tx_byte(Last_Line_Addr & 0xff);
         for (rx_last_line_count = 0; rx_last_line_count < 18;rx_last_line_count++) {
-                rx_last_line[rx_last_line_count] = warp_uart_rx_byte(Read_Addr_Line_Cmd);
+                rx_last_line[rx_last_line_count] = vooc_uart_rx_byte(Read_Addr_Line_Cmd);
                 if (chip->rx_timeout) {
                         break;
                 }
         }
-        warp_uart_irq_fiq_enable(true);
+        vooc_uart_irq_fiq_enable(true);
         if ((rx_last_line[FW_EXIST_LOW] == 0x55 && rx_last_line[FW_EXIST_HIGH] == 0x34) || chip->rx_timeout) {
                 chg_err(" Tx_Read_Addr_Line err, chip->rx_timeout:%d\n",  chip->rx_timeout);
                 goto update_err;
@@ -418,22 +415,22 @@ static bool warp_adapter_update_handle(unsigned long tx_pin, unsigned long rx_pi
 
 /*Step3: Tx_Erase_All */
         /*tx:0xF5*/
-        warp_uart_irq_fiq_enable(false);
-        warp_uart_tx_byte((Erase_All_Cmd >> 8) & 0xff);
-        warp_uart_irq_fiq_enable(true);
+        vooc_uart_irq_fiq_enable(false);
+        vooc_uart_tx_byte((Erase_All_Cmd >> 8) & 0xff);
+        vooc_uart_irq_fiq_enable(true);
 
         /*tx:0x05*/
-        warp_uart_irq_fiq_enable(false);
-        warp_uart_tx_byte(Erase_All_Cmd & 0xff);
-        rx_val = warp_uart_rx_byte(Erase_All_Cmd);
-        warp_uart_irq_fiq_enable(true);
+        vooc_uart_irq_fiq_enable(false);
+        vooc_uart_tx_byte(Erase_All_Cmd & 0xff);
+        rx_val = vooc_uart_rx_byte(Erase_All_Cmd);
+        vooc_uart_irq_fiq_enable(true);
         if (rx_val != UART_ACK || chip->rx_timeout) {
                 chg_err(" Tx_Erase_All err, chip->rx_timeout:%d\n", chip->rx_timeout);
                 goto update_err;
         }
 
 /* Step4: Tx_Write_Addr_Line */
-        rc = warp_uart_write_some_addr(&adapter_stm8s_firmware_data[0],
+        rc = vooc_uart_write_some_addr(&adapter_stm8s_firmware_data[0],
                 (sizeof(adapter_stm8s_firmware_data) - 34));
         if (rc) {
                 chg_err(" Tx_Write_Addr_Line err\n");
@@ -441,14 +438,14 @@ static bool warp_adapter_update_handle(unsigned long tx_pin, unsigned long rx_pi
         }
 
 /* Step5: Tx_Read_All */
-        rc = warp_uart_read_front_addr_and_check();
+        rc = vooc_uart_read_front_addr_and_check();
         if (rc) {
                 chg_err(" Tx_Read_All err\n");
                 goto update_err;
         }
 
 /* Step6: write the last line */
-        rc = warp_uart_write_some_addr(&adapter_stm8s_firmware_data[sizeof(adapter_stm8s_firmware_data) - 34], 34);
+        rc = vooc_uart_write_some_addr(&adapter_stm8s_firmware_data[sizeof(adapter_stm8s_firmware_data) - 34], 34);
         if (rc) {
                 chg_err(" write the last line err\n");
                 goto update_err;
@@ -456,15 +453,15 @@ static bool warp_adapter_update_handle(unsigned long tx_pin, unsigned long rx_pi
 
 /* Step7: Tx_Boot_Over */
         /*tx:0xF5*/
-        warp_uart_irq_fiq_enable(false);
-        warp_uart_tx_byte((Boot_Over_Cmd >> 8) & 0xff);
-        warp_uart_irq_fiq_enable(true);
+        vooc_uart_irq_fiq_enable(false);
+        vooc_uart_tx_byte((Boot_Over_Cmd >> 8) & 0xff);
+        vooc_uart_irq_fiq_enable(true);
 
         /*tx:0x06 */
-        warp_uart_irq_fiq_enable(false);
-        warp_uart_tx_byte(Boot_Over_Cmd & 0xff);
-        rx_val = warp_uart_rx_byte(Boot_Over_Cmd);
-        warp_uart_irq_fiq_enable(true);
+        vooc_uart_irq_fiq_enable(false);
+        vooc_uart_tx_byte(Boot_Over_Cmd & 0xff);
+        rx_val = vooc_uart_rx_byte(Boot_Over_Cmd);
+        vooc_uart_irq_fiq_enable(true);
         if (rx_val != UART_ACK || chip->rx_timeout) {
                 chg_err("  Tx_Boot_Over err, chip->rx_timeout:%d\n" , chip->rx_timeout);
                 goto update_err;
@@ -482,7 +479,7 @@ update_err:
 }
 
 #ifndef CONFIG_OPLUS_CHARGER_MTK
-bool oplus_warp_adapter_update_is_tx_gpio(unsigned long gpio_num)
+bool oplus_vooc_adapter_update_is_tx_gpio(unsigned long gpio_num)
 {
         if (!the_chip) {
                 return false;
@@ -494,7 +491,7 @@ bool oplus_warp_adapter_update_is_tx_gpio(unsigned long gpio_num)
         }
 }
 
-bool oplus_warp_adapter_update_is_rx_gpio(unsigned long gpio_num)
+bool oplus_vooc_adapter_update_is_rx_gpio(unsigned long gpio_num)
 {
         if (!the_chip) {
                 return false;
@@ -509,25 +506,32 @@ bool oplus_warp_adapter_update_is_rx_gpio(unsigned long gpio_num)
 
 static void register_adapter_devinfo(void)
 {
-#ifndef CONFIG_OPLUS_CHG_OOS
 	int ret = 0;
 	char *version;
 	char *manufacture;
-
+	
 	version = "adapter";
 	manufacture = "stm8s";
 
 	ret = register_device_proc("adapter", version, manufacture);
 	if (ret)
 		chg_err("register_adapter_devinfo fail\n");
-#endif
 }
 
 struct oplus_adapter_operations oplus_adapter_ops = {
-        .adapter_update = warp_adapter_update_handle,
+        .adapter_update = vooc_adapter_update_handle,
 };
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0))
 static int __init adapter_ic_init(void)
+#else
+void adapter_ic_exit(void)
+{
+	return;
+}
+
+int adapter_ic_init(void)
+#endif
 {
         struct oplus_adapter_chip *chip = NULL;
 		struct chip_stm *adapter_ic = NULL;
@@ -549,37 +553,37 @@ static int __init adapter_ic_init(void)
 
 		the_chip = adapter_ic;
 
+
         chip = kzalloc(sizeof(struct oplus_adapter_chip), GFP_KERNEL);
         if (!chip) {
-                chg_err(" warp_adapter alloc fail\n");
+                chg_err(" vooc_adapter alloc fail\n");
                 return -1;
         }
 
+ //       chip->client = client;
+ //       chip->dev = &client->dev;
         chip->vops = &oplus_adapter_ops;
-
+	
         oplus_adapter_init(chip);
-
+		
 		register_adapter_devinfo();
 
         chg_debug(" success\n");
         return 0;
 }
 
-#ifdef OPLUS_CHG_OP_DEF
+/*
 static void __init adapter_ic_exit(void)
 {
         return;
 }
-#endif
+*/
 
-#ifndef OPLUS_CHG_OP_DEF
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0))
 subsys_initcall(adapter_ic_init);
-
-#else
-oplus_chg_module_register(adapter_ic);
 #endif
+//module_exit(adapter_ic_exit);
 
-#ifndef MODULE
 MODULE_DESCRIPTION("Driver for oplus adapter ic stm8s");
 MODULE_LICENSE("GPL v2");
-#endif
+

@@ -43,7 +43,7 @@ signed long sde_sync_wait(void *fnc, long timeout_ms)
 					timeline_str, TIMELINE_VAL_LENGTH);
 
 		SDE_ERROR(
-			"fence driver name:%s timeline name:%s seqno:0x%llx timeline:%s signaled:0x%x\n",
+			"fence driver name:%s timeline name:%s seqno:0x%x timeline:%s signaled:0x%x\n",
 			fence->ops->get_driver_name(fence),
 			fence->ops->get_timeline_name(fence),
 			fence->seqno, timeline_str,
@@ -84,6 +84,7 @@ uint32_t sde_sync_get_name_prefix(void *fence)
 struct sde_fence {
 	struct dma_fence base;
 	struct sde_fence_context *ctx;
+	char name[SDE_FENCE_NAME_SIZE];
 	struct list_head	fence_list;
 	int fd;
 };
@@ -108,7 +109,9 @@ static inline struct sde_fence *to_sde_fence(struct dma_fence *fence)
 
 static const char *sde_fence_get_driver_name(struct dma_fence *fence)
 {
-	return "sde_fence";
+	struct sde_fence *f = to_sde_fence(fence);
+
+	return f->name;
 }
 
 static const char *sde_fence_get_timeline_name(struct dma_fence *fence)
@@ -129,7 +132,7 @@ static bool sde_fence_signaled(struct dma_fence *fence)
 	bool status;
 
 	status = ((int)(fence->seqno - f->ctx->done_count) <= 0);
-	SDE_DEBUG("status:%d fence seq:%llu and timeline:%d\n",
+	SDE_DEBUG("status:%d fence seq:%d and timeline:%d\n",
 			status, fence->seqno, f->ctx->done_count);
 	return status;
 }
@@ -150,7 +153,7 @@ static void sde_fence_value_str(struct dma_fence *fence, char *str, int size)
 	if (!fence || !str)
 		return;
 
-	snprintf(str, size, "%llu", fence->seqno);
+	snprintf(str, size, "%d", fence->seqno);
 }
 
 static void sde_fence_timeline_value_str(struct dma_fence *fence, char *str,
@@ -199,6 +202,8 @@ static int _sde_fence_create_fd(void *fence_ctx, uint32_t val)
 		return -ENOMEM;
 
 	sde_fence->ctx = fence_ctx;
+	snprintf(sde_fence->name, SDE_FENCE_NAME_SIZE, "sde_fence:%s:%u",
+						sde_fence->ctx->name, val);
 	dma_fence_init(&sde_fence->base, &sde_fence_ops, &ctx->lock,
 		ctx->context, val);
 	kref_get(&ctx->kref);
@@ -206,8 +211,8 @@ static int _sde_fence_create_fd(void *fence_ctx, uint32_t val)
 	/* create fd */
 	fd = get_unused_fd_flags(0);
 	if (fd < 0) {
-		SDE_ERROR("failed to get_unused_fd_flags(), sde_fence:%s:%u\n",
-			  sde_fence->ctx->name, val);
+		SDE_ERROR("failed to get_unused_fd_flags(), %s\n",
+							sde_fence->name);
 		dma_fence_put(&sde_fence->base);
 		goto exit;
 	}
@@ -217,8 +222,7 @@ static int _sde_fence_create_fd(void *fence_ctx, uint32_t val)
 	if (sync_file == NULL) {
 		put_unused_fd(fd);
 		fd = -EINVAL;
-		SDE_ERROR("couldn't create fence, sde_fence:%s:%u\n",
-			  sde_fence->ctx->name, val);
+		SDE_ERROR("couldn't create fence, %s\n", sde_fence->name);
 		dma_fence_put(&sde_fence->base);
 		goto exit;
 	}
@@ -431,7 +435,7 @@ void sde_fence_list_dump(struct dma_fence *fence, struct seq_file **s)
 		fence->ops->timeline_value_str(fence,
 		timeline_str, TIMELINE_VAL_LENGTH);
 
-	seq_printf(*s, "fence name:%s timeline name:%s seqno:0x%llx timeline:%s signaled:0x%x\n",
+	seq_printf(*s, "fence name:%s timeline name:%s seqno:0x%x timeline:%s signaled:0x%x\n",
 		fence->ops->get_driver_name(fence),
 		fence->ops->get_timeline_name(fence),
 		fence->seqno, timeline_str,

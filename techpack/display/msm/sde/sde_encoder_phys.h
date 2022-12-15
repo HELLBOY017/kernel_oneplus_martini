@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2015-2021, The Linux Foundation. All rights reserved.
  */
 
@@ -550,7 +549,7 @@ void sde_encoder_phys_setup_cdm(struct sde_encoder_phys *phys_enc,
  * @info:       structure used to populate the pp line count information
  */
 void sde_encoder_helper_get_pp_line_count(struct drm_encoder *drm_enc,
-		struct sde_hw_pp_vsync_info *info, int rw);
+		struct sde_hw_pp_vsync_info *info);
 
 /**
  * sde_encoder_helper_trigger_flush - control flush helper function

@@ -97,6 +97,8 @@ static void convert_to_dsi_mode(const struct drm_display_mode *drm_mode,
 void dsi_convert_to_drm_mode(const struct dsi_display_mode *dsi_mode,
 				struct drm_display_mode *drm_mode)
 {
+	bool video_mode = (dsi_mode->panel_mode == DSI_OP_VIDEO_MODE);
+
 	memset(drm_mode, 0, sizeof(*drm_mode));
 
 	drm_mode->hdisplay = dsi_mode->timing.h_active;
@@ -144,8 +146,30 @@ void dsi_convert_to_drm_mode(const struct dsi_display_mode *dsi_mode,
 	if (dsi_mode->panel_mode == DSI_OP_CMD_MODE)
 		drm_mode->flags |= DRM_MODE_FLAG_CMD_MODE_PANEL;
 
+#ifdef OPLUS_BUG_STABILITY
+	/* move source string to head to avoid missing */
+	/* qcom use node /sys/class/drm/card0-DSI-1/modes to check panel resolution */
+	/* check width value by the first value in mode name, so magic code can not at head */
+	/* please refer the qcom check logic in the file init.qcom.early_boot.sh */
 	/* set mode name */
-	*drm_mode->name = '\0';
+	if (oplus_adfr_is_support()) {
+		snprintf(drm_mode->name, DRM_DISPLAY_MODE_LEN, "%dx%dx%dx%d%sx%d",
+				drm_mode->hdisplay, drm_mode->vdisplay, drm_mode->vrefresh,
+				dsi_mode->vsync_source, video_mode ? "vid" : "cmd",
+				drm_mode->clock);
+	} else {
+		snprintf(drm_mode->name, DRM_DISPLAY_MODE_LEN, "%dx%dx%dx%d%s",
+			drm_mode->hdisplay, drm_mode->vdisplay,
+			drm_mode->vrefresh, drm_mode->clock,
+			video_mode ? "vid" : "cmd");
+	}
+#else
+	/* set mode name */
+	snprintf(drm_mode->name, DRM_DISPLAY_MODE_LEN, "%dx%dx%dx%d%s",
+			drm_mode->hdisplay, drm_mode->vdisplay,
+			drm_mode->vrefresh, drm_mode->clock,
+			video_mode ? "vid" : "cmd");
+#endif
 }
 
 static int dsi_bridge_attach(struct drm_bridge *bridge)
@@ -178,8 +202,7 @@ static void dsi_bridge_pre_enable(struct drm_bridge *bridge)
 		return;
 	}
 
-	if (bridge->encoder->crtc->state->active_changed)
-		atomic_set(&c_bridge->display->panel->esd_recovery_pending, 0);
+	atomic_set(&c_bridge->display->panel->esd_recovery_pending, 0);
 
 	/* By this point mode should have been validated through mode_fixup */
 	rc = dsi_display_set_mode(c_bridge->display,
@@ -453,10 +476,6 @@ static bool dsi_bridge_mode_fixup(struct drm_bridge *bridge,
 				dsi_mode.panel_mode);
 		}
 	}
-#ifdef OPLUS_BUG_STABILITY
-	if (display->is_cont_splash_enabled)
-		dsi_mode.dsi_mode_flags &= ~DSI_MODE_FLAG_DMS;
-#endif /* OPLUS_BUG_STABILITY */
 
 	/* Reject seamless transition when active changed */
 	if (crtc_state->active_changed &&
@@ -942,6 +961,9 @@ int dsi_connector_get_modes(struct drm_connector *connector, void *data,
 	for (i = 0; i < count; i++) {
 		struct drm_display_mode *m;
 
+		if (modes[i].splash_dms)
+			modes[i].dsi_mode_flags |= DSI_MODE_FLAG_DMS;
+
 		memset(&drm_mode, 0x0, sizeof(drm_mode));
 		dsi_convert_to_drm_mode(&modes[i], &drm_mode);
 		m = drm_mode_duplicate(connector->dev, &drm_mode);
@@ -964,6 +986,10 @@ int dsi_connector_get_modes(struct drm_connector *connector, void *data,
 			m->type |= DRM_MODE_TYPE_PREFERRED;
 		}
 		drm_mode_probed_add(connector, m);
+
+		if (modes[i].splash_dms)
+			drm_set_preferred_mode(
+				connector, m->hdisplay, m->vdisplay);
 	}
 
 	rc = dsi_drm_update_edid_name(&edid, display->panel->name);
@@ -1019,14 +1045,15 @@ enum drm_mode_status dsi_conn_mode_valid(struct drm_connector *connector,
 
 int dsi_conn_pre_kickoff(struct drm_connector *connector,
 		void *display,
-		struct msm_display_kickoff_params *params)
+		struct msm_display_kickoff_params *params,
+		bool force_update_dsi_clocks)
 {
 	if (!connector || !display || !params) {
 		DSI_ERR("Invalid params\n");
 		return -EINVAL;
 	}
 
-	return dsi_display_pre_kickoff(connector, display, params);
+	return dsi_display_pre_kickoff(connector, display, params, force_update_dsi_clocks);
 }
 
 int dsi_conn_prepare_commit(void *display,

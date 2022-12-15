@@ -1,5 +1,4 @@
 /*
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2015-2021 The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
@@ -278,7 +277,6 @@ struct sde_crtc_misr_info {
  * @misr_frame_count  : misr frame count provided by client
  * @misr_data     : store misr data before turning off the clocks.
  * @idle_notify_work: delayed worker to notify idle timeout to user space
- * @early_wakeup_work: work to trigger early wakeup
  * @power_event   : registered power event handle
  * @cur_perf      : current performance committed to clock/bandwidth driver
  * @plane_mask_old: keeps track of the planes used in the previous commit
@@ -362,7 +360,6 @@ struct sde_crtc {
 	bool misr_reconfigure;
 	u32 misr_frame_count;
 	struct kthread_delayed_work idle_notify_work;
-	struct kthread_work early_wakeup_work;
 
 	struct sde_power_event *power_event;
 
@@ -402,6 +399,7 @@ struct sde_crtc {
 enum sde_crtc_dirty_flags {
 	SDE_CRTC_DIRTY_DEST_SCALER,
 	SDE_CRTC_DIRTY_DIM_LAYERS,
+	SDE_CRTC_DIRTY_UIDLE,
 	SDE_CRTC_DIRTY_MAX,
 };
 
@@ -635,7 +633,7 @@ void sde_crtc_prepare_commit(struct drm_crtc *crtc,
  * @old_state: Pointer to drm crtc old state object
  */
 void sde_crtc_complete_commit(struct drm_crtc *crtc,
-		struct drm_crtc_state *old_state);
+	struct drm_crtc_state *old_state, bool update_perf);
 
 /**
  * sde_crtc_init - create a new crtc object

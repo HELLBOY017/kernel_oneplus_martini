@@ -425,7 +425,6 @@ enum {
 	MIXER_BLOCKS,
 	MIXER_DISP,
 	MIXER_CWB,
-	MIXER_CWB_MASK,
 	MIXER_PROP_MAX,
 };
 
@@ -711,7 +710,6 @@ static struct sde_prop_type mixer_prop[] = {
 		PROP_TYPE_STRING_ARRAY},
 	{MIXER_CWB, "qcom,sde-mixer-cwb-pref", false,
 		PROP_TYPE_STRING_ARRAY},
-	{MIXER_CWB_MASK, "qcom,sde-mixer-cwb-mask", false, PROP_TYPE_U32_ARRAY},
 };
 
 static struct sde_prop_type mixer_blocks_prop[] = {
@@ -1588,6 +1586,9 @@ static void _sde_sspp_setup_cursor(struct sde_mdss_cfg *sde_cfg,
 	struct sde_sspp_cfg *sspp, struct sde_sspp_sub_blks *sblk,
 	struct sde_prop_value *prop_value, u32 *cursor_count)
 {
+	if (!IS_SDE_MAJOR_MINOR_SAME(sde_cfg->hwversion, SDE_HW_VER_300))
+		SDE_ERROR("invalid sspp type %d, xin id %d\n",
+				sspp->type, sspp->xin_id);
 	set_bit(SDE_SSPP_CURSOR, &sspp->features);
 	sblk->maxupscale = SSPP_UNITY_SCALE;
 	sblk->maxdwnscale = SSPP_UNITY_SCALE;
@@ -1843,14 +1844,12 @@ static int _sde_sspp_setup_cmn(struct device_node *np,
 			sde_cfg->mdp[j].clk_ctrls[sspp->clk_ctrl].bit_off =
 					PROP_BITVALUE_ACCESS(props->values,
 					SSPP_CLK_CTRL, i, 1);
-			sde_cfg->mdp[j].clk_ctrls[sspp->clk_ctrl].val = -1;
 			sde_cfg->mdp[j].clk_status[sspp->clk_ctrl].reg_off =
 					PROP_BITVALUE_ACCESS(props->values,
 					SSPP_CLK_STATUS, i, 0);
 			sde_cfg->mdp[j].clk_status[sspp->clk_ctrl].bit_off =
 					PROP_BITVALUE_ACCESS(props->values,
 					SSPP_CLK_STATUS, i, 1);
-			sde_cfg->mdp[j].clk_status[sspp->clk_ctrl].val = -1;
 		}
 
 		SDE_DEBUG("xin:%d ram:%d clk%d:%x/%d\n",
@@ -1931,7 +1930,9 @@ static int sde_ctl_parse_dt(struct device_node *np,
 			set_bit(SDE_CTL_ACTIVE_CFG, &ctl->features);
 		if (SDE_UIDLE_MAJOR(sde_cfg->uidle_cfg.uidle_rev))
 			set_bit(SDE_CTL_UIDLE, &ctl->features);
-		set_bit(SDE_CTL_UNIFIED_DSPP_FLUSH, &ctl->features);
+		if (SDE_HW_MAJOR(sde_cfg->hwversion) >=
+				SDE_HW_MAJOR(SDE_HW_VER_700))
+			set_bit(SDE_CTL_UNIFIED_DSPP_FLUSH, &ctl->features);
 	}
 
 	sde_put_dt_props(props);
@@ -1975,10 +1976,10 @@ void sde_hw_ctl_set_preference(struct sde_mdss_cfg *sde_cfg,
 	}
 }
 
-u32 sde_hw_mixer_set_preference(struct sde_mdss_cfg *sde_cfg, u32 num_lm,
+void sde_hw_mixer_set_preference(struct sde_mdss_cfg *sde_cfg, u32 num_lm,
 		uint32_t disp_type)
 {
-	u32 i, cnt = 0, sec_cnt = 0, lm_mask = 0;
+	u32 i, cnt = 0, sec_cnt = 0;
 
 	if (disp_type == SDE_CONNECTOR_PRIMARY) {
 		for (i = 0; i < sde_cfg->mixer_count; i++) {
@@ -1997,7 +1998,6 @@ u32 sde_hw_mixer_set_preference(struct sde_mdss_cfg *sde_cfg, u32 num_lm,
 			if (cnt < num_lm) {
 				set_bit(SDE_DISP_PRIMARY_PREF,
 						&sde_cfg->mixer[i].features);
-				lm_mask |=  BIT(sde_cfg->mixer[i].id - 1);
 				cnt++;
 			}
 
@@ -2036,13 +2036,10 @@ u32 sde_hw_mixer_set_preference(struct sde_mdss_cfg *sde_cfg, u32 num_lm,
 					BIT(SDE_DISP_PRIMARY_PREF))) {
 				set_bit(SDE_DISP_SECONDARY_PREF,
 						&sde_cfg->mixer[i].features);
-				lm_mask |= BIT(sde_cfg->mixer[i].id - 1);
 				cnt++;
 			}
 		}
 	}
-
-	return lm_mask;
 }
 
 static int sde_mixer_parse_dt(struct device_node *np,
@@ -2153,9 +2150,6 @@ static int sde_mixer_parse_dt(struct device_node *np,
 
 		if (BIT(mixer->id - LM_0) & sde_cfg->cwb_virtual_mixers_mask)
 			set_bit(SDE_MIXER_IS_VIRTUAL, &mixer->features);
-
-		mixer->cwb_mask = !props->exists[MIXER_CWB_MASK] ? 0x0 :
-				PROP_VALUE_ACCESS(props->values, MIXER_CWB_MASK, i);
 
 		mixer->pingpong = pp_count > 0 ? pp_idx + PINGPONG_0
 							: PINGPONG_MAX;
@@ -2286,8 +2280,13 @@ static int sde_intf_parse_dt(struct device_node *np,
 			set_bit(SDE_INTF_TE, &intf->features);
 		}
 
-		set_bit(SDE_INTF_STATUS, &intf->features);
-		set_bit(SDE_INTF_TE_ALIGN_VSYNC, &intf->features);
+		if (SDE_HW_MAJOR(sde_cfg->hwversion) >=
+				SDE_HW_MAJOR(SDE_HW_VER_500))
+			set_bit(SDE_INTF_STATUS, &intf->features);
+
+		if (SDE_HW_MAJOR(sde_cfg->hwversion) >=
+				SDE_HW_MAJOR(SDE_HW_VER_700))
+			set_bit(SDE_INTF_TE_ALIGN_VSYNC, &intf->features);
 	}
 
 end:
@@ -2355,7 +2354,11 @@ static int sde_wb_parse_dt(struct device_node *np, struct sde_mdss_cfg *sde_cfg)
 			goto end;
 		}
 
-		wb->vbif_idx = VBIF_RT;
+		if (IS_SDE_MAJOR_MINOR_SAME((sde_cfg->hwversion),
+				SDE_HW_VER_170))
+			wb->vbif_idx = VBIF_NRT;
+		else
+			wb->vbif_idx = VBIF_RT;
 
 		wb->len = PROP_VALUE_ACCESS(prop_value, WB_LEN, 0);
 		if (!prop_exists[WB_LEN])
@@ -2392,8 +2395,13 @@ static int sde_wb_parse_dt(struct device_node *np, struct sde_mdss_cfg *sde_cfg)
 			set_bit(SDE_WB_HAS_CWB, &wb->features);
 			if (IS_SDE_CTL_REV_100(sde_cfg->ctl_rev))
 				set_bit(SDE_WB_CWB_CTRL, &wb->features);
-			sde_cfg->cwb_blk_off = 0x6A200;
-			sde_cfg->cwb_blk_stride = 0x1000;
+			if (major_version >= SDE_HW_MAJOR(SDE_HW_VER_700)) {
+				sde_cfg->cwb_blk_off = 0x6A200;
+				sde_cfg->cwb_blk_stride = 0x1000;
+			} else {
+				sde_cfg->cwb_blk_off = 0x83000;
+				sde_cfg->cwb_blk_stride = 0x100;
+			}
 		}
 
 		for (j = 0; j < sde_cfg->mdp_count; j++) {
@@ -2403,14 +2411,12 @@ static int sde_wb_parse_dt(struct device_node *np, struct sde_mdss_cfg *sde_cfg)
 			sde_cfg->mdp[j].clk_ctrls[wb->clk_ctrl].bit_off =
 				PROP_BITVALUE_ACCESS(prop_value,
 						WB_CLK_CTRL, i, 1);
-			sde_cfg->mdp[j].clk_ctrls[wb->clk_ctrl].val = -1;
 			sde_cfg->mdp[j].clk_status[wb->clk_ctrl].reg_off =
 				PROP_BITVALUE_ACCESS(prop_value,
 						WB_CLK_STATUS, i, 0);
 			sde_cfg->mdp[j].clk_status[wb->clk_ctrl].bit_off =
 				PROP_BITVALUE_ACCESS(prop_value,
 						WB_CLK_STATUS, i, 1);
-			sde_cfg->mdp[j].clk_status[wb->clk_ctrl].val = -1;
 		}
 
 		wb->format_list = sde_cfg->wb_formats;
@@ -3650,6 +3656,9 @@ static int sde_pp_parse_dt(struct device_node *np, struct sde_mdss_cfg *sde_cfg)
 		snprintf(sblk->te.name, SDE_HW_BLK_NAME_LEN, "te_%u",
 				pp->id - PINGPONG_0);
 
+		if (major_version < SDE_HW_MAJOR(SDE_HW_VER_500))
+			set_bit(SDE_PINGPONG_TE, &pp->features);
+
 		sblk->te2.base = PROP_VALUE_ACCESS(prop_value, TE2_OFF, i);
 		if (sblk->te2.base) {
 			sblk->te2.id = SDE_PINGPONG_TE2;
@@ -3661,6 +3670,18 @@ static int sde_pp_parse_dt(struct device_node *np, struct sde_mdss_cfg *sde_cfg)
 
 		if (PROP_VALUE_ACCESS(prop_value, PP_SLAVE, i))
 			set_bit(SDE_PINGPONG_SLAVE, &pp->features);
+
+		if (major_version < SDE_HW_MAJOR(SDE_HW_VER_700)) {
+			sblk->dsc.base = PROP_VALUE_ACCESS(prop_value,
+					DSC_OFF, i);
+			if (sblk->dsc.base) {
+				sblk->dsc.id = SDE_PINGPONG_DSC;
+				snprintf(sblk->dsc.name, SDE_HW_BLK_NAME_LEN,
+						"dsc_%u",
+						pp->id - PINGPONG_0);
+				set_bit(SDE_PINGPONG_DSC, &pp->features);
+			}
+		}
 
 		sblk->dither.base = PROP_VALUE_ACCESS(prop_value, DITHER_OFF,
 				i);
@@ -3826,6 +3847,8 @@ static int sde_top_parse_dt(struct device_node *np, struct sde_mdss_cfg *cfg)
 	_sde_top_parse_dt_helper(cfg, props);
 
 	major_version = SDE_HW_MAJOR(cfg->hwversion);
+	if (major_version < SDE_HW_MAJOR(SDE_HW_VER_500))
+		set_bit(SDE_MDP_VSYNC_SEL, &cfg->mdp[0].features);
 
 	rc = _add_to_irq_offset_list(cfg, SDE_INTR_HWBLK_TOP,
 			SDE_INTR_TOP_INTR, cfg->mdp[0].base);

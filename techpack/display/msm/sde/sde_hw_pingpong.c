@@ -12,6 +12,7 @@
 #include "sde_dbg.h"
 #include "sde_kms.h"
 #include "dsi_display.h"
+#include "oplus_display_private_api.h"
 
 #if defined(OPLUS_FEATURE_PXLW_IRIS5)
 #include "iris/dsi_iris5_api.h"
@@ -361,11 +362,21 @@ static int sde_hw_pp_setup_dither(struct sde_hw_pingpong *pp,
 #if defined(OPLUS_FEATURE_PXLW_IRIS5)
 	iris_sde_update_dither_depth_map(dither_depth_map);
 #endif
-	data = dither_depth_map[dither->c0_bitdepth] & REG_MASK(2);
-	data |= (dither_depth_map[dither->c1_bitdepth] & REG_MASK(2)) << 2;
-	data |= (dither_depth_map[dither->c2_bitdepth] & REG_MASK(2)) << 4;
-	data |= (dither_depth_map[dither->c3_bitdepth] & REG_MASK(2)) << 6;
-	data |= (dither->temporal_en) ? (1 << 8) : 0;
+//#ifdef OPLUS_BUG_STABILITY
+	if (!strcmp(display->panel->oplus_priv.vendor_name, "AMS662ZS01")) {
+		data = 2 & REG_MASK(2);
+		data |= (2 & REG_MASK(2)) << 2;
+		data |= (2 & REG_MASK(2)) << 4;
+		data |= (2 & REG_MASK(2)) << 6;
+		data |=  (1 << 8);
+	} else {
+//#endif
+		data = dither_depth_map[dither->c0_bitdepth] & REG_MASK(2);
+		data |= (dither_depth_map[dither->c1_bitdepth] & REG_MASK(2)) << 2;
+		data |= (dither_depth_map[dither->c2_bitdepth] & REG_MASK(2)) << 4;
+		data |= (dither_depth_map[dither->c3_bitdepth] & REG_MASK(2)) << 6;
+		data |= (dither->temporal_en) ? (1 << 8) : 0;
+	}
 	SDE_REG_WRITE(c, base + offset, data);
 
 	for (i = 0; i < DITHER_MATRIX_SZ - 3; i += 4) {
@@ -377,7 +388,9 @@ static int sde_hw_pp_setup_dither(struct sde_hw_pingpong *pp,
 		SDE_REG_WRITE(c, base + offset, data);
 	}
 //#ifdef OPLUS_BUG_STABILITY
-	if(strcmp(display->panel->name, "samsung amb655x fhd cmd mode dsc dsi panel") == 0) {
+	if((strcmp(display->panel->name, "samsung amb655x fhd cmd mode dsc dsi panel") == 0) ||
+		!strcmp(display->panel->oplus_priv.vendor_name, "AMS662ZS01") ||
+		is_support_panel_dither(display->panel)) {
 		SDE_REG_WRITE(c, base, 0x11);
 	} else {
 		SDE_REG_WRITE(c, base, 0);
@@ -422,7 +435,7 @@ static int sde_hw_pp_connect_external_te(struct sde_hw_pingpong *pp,
 }
 
 static int sde_hw_pp_get_vsync_info(struct sde_hw_pingpong *pp,
-		struct sde_hw_pp_vsync_info *info, int rw)
+		struct sde_hw_pp_vsync_info *info)
 {
 	struct sde_hw_blk_reg_map *c;
 	u32 val;
@@ -431,17 +444,15 @@ static int sde_hw_pp_get_vsync_info(struct sde_hw_pingpong *pp,
 		return -EINVAL;
 	c = &pp->hw;
 
-	if (rw == READ) {
-		val = SDE_REG_READ(c, PP_VSYNC_INIT_VAL);
-		info->rd_ptr_init_val = val & 0xffff;
+	val = SDE_REG_READ(c, PP_VSYNC_INIT_VAL);
+	info->rd_ptr_init_val = val & 0xffff;
 
-		val = SDE_REG_READ(c, PP_INT_COUNT_VAL);
-		info->rd_ptr_frame_count = (val & 0xffff0000) >> 16;
-		info->rd_ptr_line_count = val & 0xffff;
-	} else {
-		val = SDE_REG_READ(c, PP_LINE_COUNT);
-		info->wr_ptr_line_count = val & 0xffff;
-	}
+	val = SDE_REG_READ(c, PP_INT_COUNT_VAL);
+	info->rd_ptr_frame_count = (val & 0xffff0000) >> 16;
+	info->rd_ptr_line_count = val & 0xffff;
+
+	val = SDE_REG_READ(c, PP_LINE_COUNT);
+	info->wr_ptr_line_count = val & 0xffff;
 
 	return 0;
 }

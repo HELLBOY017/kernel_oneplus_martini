@@ -1,5 +1,4 @@
 /*
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (C) 2014-2021 The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
@@ -1972,39 +1971,6 @@ static void sde_plane_cleanup_fb(struct drm_plane *plane,
 
 }
 
-static int _sde_plane_validate_fb(struct sde_plane *psde,
-				struct drm_plane_state *state)
-{
-	struct sde_plane_state *pstate;
-	struct drm_framebuffer *fb;
-	uint32_t fb_ns = 0, fb_sec = 0, fb_sec_dir = 0;
-	unsigned long flags = 0;
-	int mode, ret = 0, n, i;
-
-	pstate = to_sde_plane_state(state);
-	mode = sde_plane_get_property(pstate,
-				PLANE_PROP_FB_TRANSLATION_MODE);
-
-	fb = state->fb;
-	n = fb->format->num_planes;
-	for (i = 0; i < n; i++) {
-		ret = msm_fb_obj_get_attrs(fb->obj[i], &fb_ns, &fb_sec,
-			&fb_sec_dir, &flags);
-
-		if (!ret && ((fb_ns && (mode != SDE_DRM_FB_NON_SEC)) ||
-			(fb_sec && (mode != SDE_DRM_FB_SEC)) ||
-			(fb_sec_dir && (mode != SDE_DRM_FB_SEC_DIR_TRANS)))) {
-			SDE_ERROR_PLANE(psde, "mode:%d fb:%d dma_buf flags:0x%x rc:%d\n",
-			mode, fb->base.id, flags, ret);
-			SDE_EVT32(psde->base.base.id, fb->base.id, flags,
-			fb_ns, fb_sec, fb_sec_dir, ret, SDE_EVTLOG_ERROR);
-			return -EINVAL;
-		}
-	}
-
-	return 0;
-}
-
 static void _sde_plane_sspp_atomic_check_mode_changed(struct sde_plane *psde,
 		struct drm_plane_state *state,
 		struct drm_plane_state *old_state)
@@ -2674,11 +2640,6 @@ static int sde_plane_sspp_atomic_check(struct drm_plane *plane,
 		return ret;
 
 	ret = _sde_plane_validate_shared_crtc(psde, state);
-	if (ret)
-		return ret;
-
-	ret = _sde_plane_validate_fb(psde, state);
-
 	if (ret)
 		return ret;
 
@@ -3682,7 +3643,7 @@ static void _sde_plane_setup_capabilities_blob(struct sde_plane *psde,
 	sde_kms_info_add_keyint(info, "pipe_idx", pipe_id);
 
 	index = (master_plane_id == 0) ? 0 : 1;
-	if (catalog->has_demura && psde->pipe < SSPP_MAX &&
+	if (catalog->has_demura &&
 	    catalog->demura_supported[psde->pipe][index] != ~0x0)
 		sde_kms_info_add_keyint(info, "demura_block", index);
 
@@ -3754,7 +3715,7 @@ static void _sde_plane_install_properties(struct drm_plane *plane,
 	struct sde_kms_info *info;
 	struct sde_plane *psde = to_sde_plane(plane);
 	bool is_master;
-	int zpos_max = INT_MAX;
+	int zpos_max = 255;
 	int zpos_def = 0;
 
 	if (!plane || !psde) {
@@ -3772,10 +3733,25 @@ static void _sde_plane_install_properties(struct drm_plane *plane,
 	psde->catalog = catalog;
 	is_master = !psde->is_virtual;
 
-	info = vzalloc(sizeof(struct sde_kms_info));
+	info = kzalloc(sizeof(struct sde_kms_info), GFP_KERNEL);
 	if (!info) {
 		SDE_ERROR("failed to allocate info memory\n");
 		return;
+	}
+
+	if (sde_is_custom_client()) {
+		if (catalog->mixer_count &&
+				catalog->mixer[0].sblk->maxblendstages) {
+			zpos_max = catalog->mixer[0].sblk->maxblendstages - 1;
+			if (catalog->has_base_layer &&
+					(zpos_max > SDE_STAGE_MAX - 1))
+				zpos_max = SDE_STAGE_MAX - 1;
+			else if (zpos_max > SDE_STAGE_MAX - SDE_STAGE_0 - 1)
+				zpos_max = SDE_STAGE_MAX - SDE_STAGE_0 - 1;
+		}
+	} else if (plane->type != DRM_PLANE_TYPE_PRIMARY) {
+		/* reserve zpos == 0 for primary planes */
+		zpos_def = drm_plane_index(plane) + 1;
 	}
 
 	msm_property_install_range(&psde->property_info, "zpos",
@@ -3841,7 +3817,7 @@ static void _sde_plane_install_properties(struct drm_plane *plane,
 			ARRAY_SIZE(e_fb_translation_mode), 0,
 			PLANE_PROP_FB_TRANSLATION_MODE);
 
-	vfree(info);
+	kfree(info);
 }
 
 static inline void _sde_plane_set_csc_v1(struct sde_plane *psde,
@@ -4062,8 +4038,6 @@ static int sde_plane_atomic_set_property(struct drm_plane *plane,
 {
 	struct sde_plane *psde = plane ? to_sde_plane(plane) : NULL;
 	struct sde_plane_state *pstate;
-	struct drm_property *fod_property;
-	int fod_val = 0;
 	int idx, ret = -EINVAL;
 
 	SDE_DEBUG_PLANE(psde, "\n");
@@ -4074,25 +4048,11 @@ static int sde_plane_atomic_set_property(struct drm_plane *plane,
 		SDE_ERROR_PLANE(psde, "invalid state\n");
 	} else {
 		pstate = to_sde_plane_state(state);
-		idx = msm_property_index(&psde->property_info,
-			property);
-		if (idx == PLANE_PROP_ZPOS) {
-			if (val & FOD_PRESSED_LAYER_ZORDER) {
-				val &= ~FOD_PRESSED_LAYER_ZORDER;
-				fod_val = 2; // pressed
-			}
-
-			fod_property = psde->property_info.
-				property_array[PLANE_PROP_CUSTOM];
-			ret = msm_property_atomic_set(&psde->property_info,
-				&pstate->property_state,
-				fod_property, fod_val);
-			if (ret)
-				SDE_ERROR("failed to set fod prop");
-		}
 		ret = msm_property_atomic_set(&psde->property_info,
 				&pstate->property_state, property, val);
 		if (!ret) {
+			idx = msm_property_index(&psde->property_info,
+					property);
 			switch (idx) {
 			case PLANE_PROP_INPUT_FENCE:
 				_sde_plane_set_input_fence(psde, pstate, val);

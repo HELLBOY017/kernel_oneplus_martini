@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  */
 #include <linux/iopoll.h>
@@ -182,7 +181,11 @@ static void sde_hw_intf_avr_ctrl(struct sde_hw_intf *ctx,
 static inline void _check_and_set_comp_bit(struct sde_hw_intf *ctx,
 		bool dsc_4hs_merge, bool compression_en, u32 *intf_cfg2)
 {
-	if (compression_en)
+	if (((SDE_HW_MAJOR(ctx->mdss->hwversion) >=
+				SDE_HW_MAJOR(SDE_HW_VER_700)) &&
+				compression_en) ||
+			(IS_SDE_MAJOR_SAME(ctx->mdss->hwversion,
+				SDE_HW_VER_600) && dsc_4hs_merge))
 		(*intf_cfg2) |= BIT(12);
 }
 
@@ -254,11 +257,10 @@ static void sde_hw_intf_setup_timing_engine(struct sde_hw_intf *ctx,
 	data_width = p->width;
 
 	if (p->compression_en) {
-		if (p->wide_bus_en)
-			data_width = DIV_ROUND_UP(p->dce_bytes_per_line, 6);
-		else
-			data_width = DIV_ROUND_UP(p->dce_bytes_per_line, 3);
+		data_width = DIV_ROUND_UP(p->dce_bytes_per_line, 3);
 
+		if (p->wide_bus_en)
+			data_width >>= 1;
 	} else if (!dp_intf && p->wide_bus_en) {
 		data_width = p->width >> 1;
 	} else {
@@ -541,30 +543,20 @@ static int sde_hw_intf_setup_te_config(struct sde_hw_intf *intf,
 		struct sde_hw_tear_check *te)
 {
 	struct sde_hw_blk_reg_map *c;
-	u32 cfg = 0;
-	spinlock_t tearcheck_spinlock;
+	int cfg;
 
 	if (!intf)
 		return -EINVAL;
 
-	spin_lock_init(&tearcheck_spinlock);
 	c = &intf->hw;
 
+	cfg = BIT(19); /* VSYNC_COUNTER_EN */
 	if (te->hw_vsync_mode)
 		cfg |= BIT(20);
 
 	cfg |= te->vsync_count;
 
-	/*
-	 * Local spinlock is acquired here to avoid pre-emption
-	 * as below register programming should be completed in
-	 * less than 2^16 vsync clk cycles.
-	 */
-	spin_lock(&tearcheck_spinlock);
-	SDE_REG_WRITE(c, INTF_TEAR_SYNC_WRCOUNT,
-			(te->start_pos + te->sync_threshold_start + 1));
 	SDE_REG_WRITE(c, INTF_TEAR_SYNC_CONFIG_VSYNC, cfg);
-	wmb(); /* disable vsync counter before updating single buffer registers */
 	SDE_REG_WRITE(c, INTF_TEAR_SYNC_CONFIG_HEIGHT, te->sync_cfg_height);
 	SDE_REG_WRITE(c, INTF_TEAR_VSYNC_INIT_VAL, te->vsync_init_val);
 	SDE_REG_WRITE(c, INTF_TEAR_RD_PTR_IRQ, te->rd_ptr_irq);
@@ -573,9 +565,8 @@ static int sde_hw_intf_setup_te_config(struct sde_hw_intf *intf,
 	SDE_REG_WRITE(c, INTF_TEAR_SYNC_THRESH,
 			((te->sync_threshold_continue << 16) |
 			 te->sync_threshold_start));
-	cfg |= BIT(19); /* VSYNC_COUNTER_EN */
-	SDE_REG_WRITE(c, INTF_TEAR_SYNC_CONFIG_VSYNC, cfg);
-	spin_unlock(&tearcheck_spinlock);
+	SDE_REG_WRITE(c, INTF_TEAR_SYNC_WRCOUNT,
+			(te->start_pos + te->sync_threshold_start + 1));
 
 	return 0;
 }
@@ -687,7 +678,7 @@ static int sde_hw_intf_connect_external_te(struct sde_hw_intf *intf,
 }
 
 static int sde_hw_intf_get_vsync_info(struct sde_hw_intf *intf,
-		struct sde_hw_pp_vsync_info *info, int rw)
+		struct sde_hw_pp_vsync_info *info)
 {
 	struct sde_hw_blk_reg_map *c = &intf->hw;
 	u32 val;
@@ -697,20 +688,18 @@ static int sde_hw_intf_get_vsync_info(struct sde_hw_intf *intf,
 
 	c = &intf->hw;
 
-	if (rw == READ) {
-		val = SDE_REG_READ(c, INTF_TEAR_VSYNC_INIT_VAL);
-		info->rd_ptr_init_val = val & 0xffff;
+	val = SDE_REG_READ(c, INTF_TEAR_VSYNC_INIT_VAL);
+	info->rd_ptr_init_val = val & 0xffff;
 
-		val = SDE_REG_READ(c, INTF_TEAR_INT_COUNT_VAL);
-		info->rd_ptr_frame_count = (val & 0xffff0000) >> 16;
-		info->rd_ptr_line_count = val & 0xffff;
-	} else {
-		val = SDE_REG_READ(c, INTF_TEAR_LINE_COUNT);
-		info->wr_ptr_line_count = val & 0xffff;
+	val = SDE_REG_READ(c, INTF_TEAR_INT_COUNT_VAL);
+	info->rd_ptr_frame_count = (val & 0xffff0000) >> 16;
+	info->rd_ptr_line_count = val & 0xffff;
 
-		val = SDE_REG_READ(c, INTF_FRAME_COUNT);
-		info->intf_frame_count = val;
-	}
+	val = SDE_REG_READ(c, INTF_TEAR_LINE_COUNT);
+	info->wr_ptr_line_count = val & 0xffff;
+
+	val = SDE_REG_READ(c, INTF_FRAME_COUNT);
+	info->intf_frame_count = val;
 
 	return 0;
 }

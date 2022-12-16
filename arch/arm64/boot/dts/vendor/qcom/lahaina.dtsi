@@ -34,7 +34,7 @@
 	#size-cells = <2>;
 
 	chosen {
-		bootargs = "log_buf_len=256K earlycon=msm_geni_serial,0x98c000 rcu_nocbs=0-7 kpti=off noirqdebug mitigations=off";
+		bootargs = "log_buf_len=256K earlycon=msm_geni_serial,0x98c000 rcupdate.rcu_expedited=1 rcu_nocbs=0-7 kpti=off noirqdebug quiet";
 	};
 
 	memory { device_type = "memory"; reg = <0 0 0 0>; };
@@ -158,7 +158,7 @@
 			cpu-release-addr = <0x0 0x90000000>;
 			qcom,freq-domain = <&cpufreq_hw 1 4>;
 			capacity-dmips-mhz = <1946>;
-			dynamic-power-coefficient = <454>;
+			dynamic-power-coefficient = <515>;
 			cpu-idle-states = <&GOLD_RAIL_OFF>;
 			next-level-cache = <&L2_4>;
 			#cooling-cells = <2>;
@@ -177,7 +177,7 @@
 			cpu-release-addr = <0x0 0x90000000>;
 			qcom,freq-domain = <&cpufreq_hw 1 4>;
 			capacity-dmips-mhz = <1946>;
-			dynamic-power-coefficient = <454>;
+			dynamic-power-coefficient = <515>;
 			cpu-idle-states = <&GOLD_RAIL_OFF>;
 			next-level-cache = <&L2_5>;
 			#cooling-cells = <2>;
@@ -196,7 +196,7 @@
 			cpu-release-addr = <0x0 0x90000000>;
 			qcom,freq-domain = <&cpufreq_hw 1 4>;
 			capacity-dmips-mhz = <1946>;
-			dynamic-power-coefficient = <454>;
+			dynamic-power-coefficient = <515>;
 			cpu-idle-states = <&GOLD_RAIL_OFF>;
 			next-level-cache = <&L2_6>;
 			#cooling-cells = <2>;
@@ -215,7 +215,7 @@
 			cpu-release-addr = <0x0 0x90000000>;
 			qcom,freq-domain = <&cpufreq_hw 2 4>;
 			capacity-dmips-mhz = <2048>;
-			dynamic-power-coefficient = <704>;
+			dynamic-power-coefficient = <845>;
 			cpu-idle-states = <&GOLD_RAIL_OFF>;
 			next-level-cache = <&L2_7>;
 			#cooling-cells = <2>;
@@ -573,6 +573,14 @@
 		alloc-ranges = <0x0 0x00000000 0x0 0xdfffffff>;
 		alignment = <0x0 0x100000>;
 		size = <0x0 0x800000>;
+	};
+
+	non_secure_display_memory: non_secure_display_region {
+		compatible = "shared-dma-pool";
+		alloc-ranges = <0x0 0x00000000 0x0 0xffffffff>;
+		reusable;
+		alignment = <0x0 0x400000>;
+		size = <0x0 0x6400000>;
 	};
 };
 
@@ -2481,18 +2489,6 @@
 		#clock-cells = <1>;
 	};
 
-	pixel-em {
-		compatible = "qcom,pixel-em";
-		profile = "
-			cpu0 {
-			}
-			cpu4 {
-			}
-			cpu7 {
-			}
-		";
-	};
-
 	cpufreq_hw: qcom,cpufreq-hw {
 		compatible = "qcom,cpufreq-hw-epss";
 		reg = <0x18591000 0x1000>, <0x18592000 0x1000>,
@@ -4274,8 +4270,6 @@
 				qcom,intents = <0x800  5
 						0x2000 3
 						0x4400 2>;
-				qcom,non-wake-svc = <0x51
-						0x190>;
 			};
 
 			qcom,modem_ds {
@@ -4709,6 +4703,7 @@
 		qcom,ipa-holb-monitor-max-cnt-11ad = <10>;
 		qcom,tx-wrapper-cache-max-size = <400>;
 		qcom,ipa-gpi-event-rp-ddr;
+		qcom,register-collection-on-crash;
 		clock-names = "core_clk";
 		clocks = <&clock_rpmh RPMH_IPA_CLK>;
 		qcom,interconnect,num-cases = <5>;
@@ -5442,7 +5437,7 @@
 		qcom,tcs_offset_int_pow_amp_vreg = <0x4D0>;
 		use-pm-domain;
 		cnss-enable-self-recovery;
-		qcom,same-dt-multi-dev;
+                qcom,same-dt-multi-dev;
 
 		vdd-wlan-aon-supply = <&S2E>;
 		qcom,vdd-wlan-aon-config = <950000 952000 0 0 1>;

@@ -416,7 +416,10 @@
 
 	pil_trustedvm_mem: pil_trustedvm_region@d0800000 {
 		no-map;
-		reg = <0x0 0xd0800000 0x0 0x76f7000>;
+		//#ifdef OPLUS_FEATURE_BOOT_SECURITY
+		/* 2021/06/21, delete for not use TVM TUI */
+		//reg = <0x0 0xd0800000 0x0 0x76f7000>;
+		//#endif /* OPLUS_FEATURE_BOOT_SECURITY */
 	};
 
 	qrtr_shbuf: qrtr-shmem {
@@ -4096,8 +4099,6 @@
 				qcom,intents = <0x800  5
 						0x2000 3
 						0x4400 2>;
-				qcom,non-wake-svc = <0x51
-						0x190>;
 			};
 
 			qcom,adsp_glink_ssr {
@@ -5047,6 +5048,11 @@
 		gpu_gaming_bin: gpu_gaming_bin@1f5 {
 			reg = <0x1f5 0x1>;
 			bits = <5 1>;
+		};
+
+		gpu_model_bin: gpu_model_bin@1e9 {
+			reg = <0x1e9 0x2>;
+			bits = <5 8>;
 		};
 
 		feat_conf_m7: feat_conf_m7@6020 {

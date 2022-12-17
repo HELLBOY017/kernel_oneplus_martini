@@ -822,3 +822,4 @@ int freq_qos_remove_notifier(struct freq_constraints *qos,
 	return ret;
 }
 EXPORT_SYMBOL_GPL(freq_qos_remove_notifier);
+

@@ -11172,3 +11172,4 @@ int oplus_chg_get_bcc_curr_done_status(void)
 	chg_err("bcc_curr_done:%d\n", ret);
 	return ret;
 }
+

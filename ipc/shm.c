@@ -526,13 +526,13 @@ static vm_fault_t shm_fault(struct vm_fault *vmf)
 	return sfd->vm_ops->fault(vmf);
 }
 
-static int shm_may_split(struct vm_area_struct *vma, unsigned long addr)
+static int shm_split(struct vm_area_struct *vma, unsigned long addr)
 {
 	struct file *file = vma->vm_file;
 	struct shm_file_data *sfd = shm_file_data(file);
 
-	if (sfd->vm_ops->may_split)
-		return sfd->vm_ops->may_split(vma, addr);
+	if (sfd->vm_ops->split)
+		return sfd->vm_ops->split(vma, addr);
 
 	return 0;
 }
@@ -674,7 +674,7 @@ static const struct vm_operations_struct shm_vm_ops = {
 	.open	= shm_open,	/* callback for a new vm-area open */
 	.close	= shm_close,	/* callback for when the vm-area is released */
 	.fault	= shm_fault,
-	.may_split = shm_may_split,
+	.split	= shm_split,
 	.pagesize = shm_pagesize,
 #if defined(CONFIG_NUMA)
 	.set_policy = shm_set_policy,
@@ -711,7 +711,7 @@ static int newseg(struct ipc_namespace *ns, struct ipc_params *params)
 			ns->shm_tot + numpages > ns->shm_ctlall)
 		return -ENOSPC;
 
-	shp = kvmalloc(sizeof(*shp), GFP_KERNEL_ACCOUNT);
+	shp = kvmalloc(sizeof(*shp), GFP_KERNEL);
 	if (unlikely(!shp))
 		return -ENOMEM;
 
@@ -1640,7 +1640,7 @@ long do_shmat(int shmid, char __user *shmaddr, int shmflg,
 	if (err)
 		goto out_fput;
 
-	if (mmap_write_lock_killable(current->mm)) {
+	if (down_write_killable(&current->mm->mmap_sem)) {
 		err = -EINTR;
 		goto out_fput;
 	}
@@ -1654,13 +1654,13 @@ long do_shmat(int shmid, char __user *shmaddr, int shmflg,
 			goto invalid;
 	}
 
-	addr = do_mmap(file, addr, size, prot, flags, 0, &populate, NULL);
+	addr = do_mmap_pgoff(file, addr, size, prot, flags, 0, &populate, NULL);
 	*raddr = addr;
 	err = 0;
 	if (IS_ERR_VALUE(addr))
 		err = (long)addr;
 invalid:
-	mmap_write_unlock(current->mm);
+	up_write(&current->mm->mmap_sem);
 	if (populate)
 		mm_populate(addr, populate);
 
@@ -1735,7 +1735,7 @@ long ksys_shmdt(char __user *shmaddr)
 	if (addr & ~PAGE_MASK)
 		return retval;
 
-	if (mmap_write_lock_killable(mm))
+	if (down_write_killable(&mm->mmap_sem))
 		return -EINTR;
 
 	/*
@@ -1823,7 +1823,7 @@ long ksys_shmdt(char __user *shmaddr)
 
 #endif
 
-	mmap_write_unlock(mm);
+	up_write(&mm->mmap_sem);
 	return retval;
 }
 

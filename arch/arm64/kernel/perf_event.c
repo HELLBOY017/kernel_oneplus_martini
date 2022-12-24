@@ -13,15 +13,12 @@
 #include <asm/sysreg.h>
 #include <asm/virt.h>
 
-#include <clocksource/arm_arch_timer.h>
-
 #include <linux/acpi.h>
 #include <linux/clocksource.h>
 #include <linux/kvm_host.h>
 #include <linux/of.h>
 #include <linux/perf/arm_pmu.h>
 #include <linux/platform_device.h>
-#include <linux/sched_clock.h>
 #include <linux/smp.h>
 
 /* ARMv8 Cortex-A53 specific event types. */
@@ -1192,54 +1189,28 @@ device_initcall(armv8_pmu_driver_init)
 void arch_perf_update_userpage(struct perf_event *event,
 			       struct perf_event_mmap_page *userpg, u64 now)
 {
-	struct clock_read_data *rd;
-	unsigned int seq;
-	u64 ns;
+	u32 freq;
+	u32 shift;
 
-	userpg->cap_user_time = 0;
-	userpg->cap_user_time_zero = 0;
-	userpg->cap_user_time_short = 0;
+	/*
+	 * Internal timekeeping for enabled/running/stopped times
+	 * is always computed with the sched_clock.
+	 */
+	freq = arch_timer_get_rate();
+	userpg->cap_user_time = 1;
 
-	do {
-		rd = sched_clock_read_begin(&seq);
-
-		if (rd->read_sched_clock != arch_timer_read_counter)
-			return;
-
-		userpg->time_mult = rd->mult;
-		userpg->time_shift = rd->shift;
-		userpg->time_zero = rd->epoch_ns;
-		userpg->time_cycles = rd->epoch_cyc;
-		userpg->time_mask = rd->sched_clock_mask;
-
-		/*
-		 * Subtract the cycle base, such that software that
-		 * doesn't know about cap_user_time_short still 'works'
-		 * assuming no wraps.
-		 */
-		ns = mul_u64_u32_shr(rd->epoch_cyc, rd->mult, rd->shift);
-		userpg->time_zero -= ns;
-
-	} while (sched_clock_read_retry(seq));
-
-	userpg->time_offset = userpg->time_zero - now;
-
+	clocks_calc_mult_shift(&userpg->time_mult, &shift, freq,
+			NSEC_PER_SEC, 0);
 	/*
 	 * time_shift is not expected to be greater than 31 due to
 	 * the original published conversion algorithm shifting a
 	 * 32-bit value (now specifies a 64-bit value) - refer
 	 * perf_event_mmap_page documentation in perf_event.h.
 	 */
-	if (userpg->time_shift == 32) {
-		userpg->time_shift = 31;
+	if (shift == 32) {
+		shift = 31;
 		userpg->time_mult >>= 1;
 	}
-
-	/*
-	 * Internal timekeeping for enabled/running/stopped times
-	 * is always computed with the sched_clock.
-	 */
-	userpg->cap_user_time = 1;
-	userpg->cap_user_time_zero = 1;
-	userpg->cap_user_time_short = 1;
+	userpg->time_shift = (u16)shift;
+	userpg->time_offset = -now;
 }

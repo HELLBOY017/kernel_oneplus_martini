@@ -225,6 +225,7 @@ static void notrace start_secondary(void *unused)
 	load_current_idt();
 	cpu_init();
 	x86_cpuinit.early_percpu_clock_init();
+	preempt_disable();
 	smp_callin();
 
 	enable_start_cpu0 = 0;
@@ -1379,12 +1380,12 @@ void __init native_smp_prepare_cpus(unsigned int max_cpus)
 	speculative_store_bypass_ht_init();
 }
 
-void arch_thaw_secondary_cpus_begin(void)
+void arch_enable_nonboot_cpus_begin(void)
 {
 	set_mtrr_aps_delayed_init();
 }
 
-void arch_thaw_secondary_cpus_end(void)
+void arch_enable_nonboot_cpus_end(void)
 {
 	mtrr_aps_init();
 }

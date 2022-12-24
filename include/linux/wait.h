@@ -530,11 +530,10 @@ do {										\
 										\
 	hrtimer_init_sleeper_on_stack(&__t, CLOCK_MONOTONIC,			\
 				      HRTIMER_MODE_REL);			\
-	if ((timeout) != KTIME_MAX) {						\
-		hrtimer_set_expires_range_ns(&__t.timer, timeout,		\
-					current->timer_slack_ns);		\
-		hrtimer_sleeper_start_expires(&__t, HRTIMER_MODE_REL);		\
-	}									\
+	if ((timeout) != KTIME_MAX)						\
+		hrtimer_start_range_ns(&__t.timer, timeout,			\
+				       current->timer_slack_ns,			\
+				       HRTIMER_MODE_REL);			\
 										\
 	__ret = ___wait_event(wq_head, condition, state, 0, 0,			\
 		if (!__t.task) {						\
@@ -1172,7 +1171,5 @@ int autoremove_wake_function(struct wait_queue_entry *wq_entry, unsigned mode, i
 		INIT_LIST_HEAD(&(wait)->entry);					\
 		(wait)->flags = 0;						\
 	} while (0)
-
-bool try_invoke_on_locked_down_task(struct task_struct *p, bool (*func)(struct task_struct *t, void *arg), void *arg);
 
 #endif /* _LINUX_WAIT_H */

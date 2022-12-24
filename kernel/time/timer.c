@@ -494,11 +494,7 @@ static inline void timer_set_idx(struct timer_list *timer, unsigned int idx)
 #ifndef CONFIG_SCHED_WALT
 static inline unsigned calc_index(unsigned expires, unsigned lvl)
 {
-	if (lvl != 0 && (expires & ~(UINT_MAX << LVL_SHIFT(lvl))))
-		expires = (expires + LVL_GRAN(lvl)) >> LVL_SHIFT(lvl);
-	else
-		expires = expires >> LVL_SHIFT(lvl);
-
+	expires = (expires + LVL_GRAN(lvl)) >> LVL_SHIFT(lvl);
 	return LVL_OFFS(lvl) + (expires & LVL_MASK);
 }
 #else
@@ -2068,7 +2064,8 @@ static void __migrate_timers(unsigned int cpu, bool remove_pinned)
 		 */
 		forward_timer_base(new_base);
 
-		BUG_ON(old_base->running_timer);
+		if (!cpu_online(cpu))
+			BUG_ON(old_base->running_timer);
 
 		for (i = 0; i < WHEEL_SIZE; i++)
 			migrate_timer_list(new_base, old_base->vectors + i,
@@ -2087,12 +2084,10 @@ int timers_dead_cpu(unsigned int cpu)
 	return 0;
 }
 
-#ifdef CONFIG_CPUSETS
 void timer_quiesce_cpu(void *cpup)
 {
 	__migrate_timers(*(unsigned int *)cpup, false);
 }
-#endif /* CONFIG_CPUSETS */
 
 #endif /* CONFIG_HOTPLUG_CPU */
 
@@ -2163,32 +2158,6 @@ unsigned long msleep_interruptible(unsigned int msecs)
 EXPORT_SYMBOL(msleep_interruptible);
 
 /**
- * usleep_range_state - Sleep for an approximate time in a given state
- * @min:	Minimum time in usecs to sleep
- * @max:	Maximum time in usecs to sleep
- * @state:	State of the current task that will be while sleeping
- *
- * In non-atomic context where the exact wakeup time is flexible, use
- * usleep_range_state() instead of udelay().  The sleep improves responsiveness
- * by avoiding the CPU-hogging busy-wait of udelay(), and the range reduces
- * power usage by allowing hrtimers to take advantage of an already-
- * scheduled interrupt instead of scheduling a new one just for this sleep.
- */
-void __sched usleep_range_state(unsigned long min, unsigned long max,
-				unsigned int state)
-{
-	ktime_t exp = ktime_add_us(ktime_get(), min);
-	u64 delta = (u64)(max - min) * NSEC_PER_USEC;
-
-	for (;;) {
-		__set_current_state(state);
-		/* Do not return before the requested sleep time has elapsed */
-		if (!schedule_hrtimeout_range(&exp, delta, HRTIMER_MODE_ABS))
-			break;
-	}
-}
-
-/**
  * usleep_range - Sleep for an approximate time
  * @min: Minimum time in usecs to sleep
  * @max: Maximum time in usecs to sleep
@@ -2201,6 +2170,14 @@ void __sched usleep_range_state(unsigned long min, unsigned long max,
  */
 void __sched usleep_range(unsigned long min, unsigned long max)
 {
-	usleep_range_state(min, max, TASK_UNINTERRUPTIBLE);
+	ktime_t exp = ktime_add_us(ktime_get(), min);
+	u64 delta = (u64)(max - min) * NSEC_PER_USEC;
+
+	for (;;) {
+		__set_current_state(TASK_UNINTERRUPTIBLE);
+		/* Do not return before the requested sleep time has elapsed */
+		if (!schedule_hrtimeout_range(&exp, delta, HRTIMER_MODE_ABS))
+			break;
+	}
 }
 EXPORT_SYMBOL(usleep_range);

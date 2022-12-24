@@ -18,7 +18,6 @@
 #include <linux/sched.h>
 #include <linux/sched/rt.h>
 #include <linux/sched/task.h>
-#include <linux/sched/isolation.h>
 #include <uapi/linux/sched/types.h>
 #include <linux/task_work.h>
 
@@ -228,45 +227,7 @@ int irq_do_set_affinity(struct irq_data *data, const struct cpumask *mask,
 	if (!chip || !chip->irq_set_affinity)
 		return -EINVAL;
 
-	/*
-	 * If this is a managed interrupt and housekeeping is enabled on
-	 * it check whether the requested affinity mask intersects with
-	 * a housekeeping CPU. If so, then remove the isolated CPUs from
-	 * the mask and just keep the housekeeping CPU(s). This prevents
-	 * the affinity setter from routing the interrupt to an isolated
-	 * CPU to avoid that I/O submitted from a housekeeping CPU causes
-	 * interrupts on an isolated one.
-	 *
-	 * If the masks do not intersect or include online CPU(s) then
-	 * keep the requested mask. The isolated target CPUs are only
-	 * receiving interrupts when the I/O operation was submitted
-	 * directly from them.
-	 *
-	 * If all housekeeping CPUs in the affinity mask are offline, the
-	 * interrupt will be migrated by the CPU hotplug code once a
-	 * housekeeping CPU which belongs to the affinity mask comes
-	 * online.
-	 */
-	if (irqd_affinity_is_managed(data) &&
-	    housekeeping_enabled(HK_FLAG_MANAGED_IRQ)) {
-		const struct cpumask *hk_mask, *prog_mask;
-
-		static DEFINE_RAW_SPINLOCK(tmp_mask_lock);
-		static struct cpumask tmp_mask;
-
-		hk_mask = housekeeping_cpumask(HK_FLAG_MANAGED_IRQ);
-
-		raw_spin_lock(&tmp_mask_lock);
-		cpumask_and(&tmp_mask, mask, hk_mask);
-		if (!cpumask_intersects(&tmp_mask, cpu_online_mask))
-			prog_mask = mask;
-		else
-			prog_mask = &tmp_mask;
-		ret = chip->irq_set_affinity(data, prog_mask, force);
-		raw_spin_unlock(&tmp_mask_lock);
-	} else {
-		ret = chip->irq_set_affinity(data, mask, force);
-	}
+	ret = chip->irq_set_affinity(data, mask, force);
 	switch (ret) {
 	case IRQ_SET_MASK_OK:
 	case IRQ_SET_MASK_OK_DONE:
@@ -1332,6 +1293,9 @@ static int
 setup_irq_thread(struct irqaction *new, unsigned int irq, bool secondary)
 {
 	struct task_struct *t;
+	struct sched_param param = {
+		.sched_priority = MAX_USER_RT_PRIO/2,
+	};
 
 	if (!secondary) {
 		t = kthread_create(irq_thread, new, "irq/%d-%s", irq,
@@ -1339,12 +1303,13 @@ setup_irq_thread(struct irqaction *new, unsigned int irq, bool secondary)
 	} else {
 		t = kthread_create(irq_thread, new, "irq/%d-s-%s", irq,
 				   new->name);
+		param.sched_priority -= 1;
 	}
 
 	if (IS_ERR(t))
 		return PTR_ERR(t);
 
-	sched_set_fifo(t);
+	sched_setscheduler_nocheck(t, SCHED_FIFO, &param);
 
 	/*
 	 * We keep the reference to the task struct even if

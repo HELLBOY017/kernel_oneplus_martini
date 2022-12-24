@@ -1849,7 +1849,7 @@ static int prctl_set_mm_exe_file(struct mm_struct *mm, unsigned int fd)
 	if (exe_file) {
 		struct vm_area_struct *vma;
 
-		mmap_read_lock(mm);
+		down_read(&mm->mmap_sem);
 		for (vma = mm->mmap; vma; vma = vma->vm_next) {
 			if (!vma->vm_file)
 				continue;
@@ -1858,7 +1858,7 @@ static int prctl_set_mm_exe_file(struct mm_struct *mm, unsigned int fd)
 				goto exit_err;
 		}
 
-		mmap_read_unlock(mm);
+		up_read(&mm->mmap_sem);
 		fput(exe_file);
 	}
 
@@ -1872,7 +1872,7 @@ exit:
 	fdput(exe);
 	return err;
 exit_err:
-	mmap_read_unlock(mm);
+	up_read(&mm->mmap_sem);
 	fput(exe_file);
 	goto exit;
 }
@@ -2006,7 +2006,7 @@ static int prctl_set_mm_map(int opt, const void __user *addr, unsigned long data
 	 * arg_lock protects concurent updates but we still need mmap_sem for
 	 * read to exclude races with sys_brk.
 	 */
-	mmap_read_lock(mm);
+	down_read(&mm->mmap_sem);
 
 	/*
 	 * We don't validate if these members are pointing to
@@ -2045,7 +2045,7 @@ static int prctl_set_mm_map(int opt, const void __user *addr, unsigned long data
 	if (prctl_map.auxv_size)
 		memcpy(mm->saved_auxv, user_auxv, sizeof(user_auxv));
 
-	mmap_read_unlock(mm);
+	up_read(&mm->mmap_sem);
 	return 0;
 }
 #endif /* CONFIG_CHECKPOINT_RESTORE */
@@ -2121,7 +2121,7 @@ static int prctl_set_mm(int opt, unsigned long addr,
 	 * mmap_sem for a) concurrent sys_brk, b) finding VMA for addr
 	 * validation.
 	 */
-	mmap_read_lock(mm);
+	down_read(&mm->mmap_sem);
 	vma = find_vma(mm, addr);
 
 	spin_lock(&mm->arg_lock);
@@ -2213,7 +2213,7 @@ static int prctl_set_mm(int opt, unsigned long addr,
 	error = 0;
 out:
 	spin_unlock(&mm->arg_lock);
-	mmap_read_unlock(mm);
+	up_read(&mm->mmap_sem);
 	return error;
 }
 
@@ -2383,7 +2383,7 @@ static int prctl_set_vma(unsigned long opt, unsigned long start,
 	if (end == start)
 		return 0;
 
-	mmap_write_lock(mm);
+	down_write(&mm->mmap_sem);
 
 	switch (opt) {
 	case PR_SET_VMA_ANON_NAME:
@@ -2393,7 +2393,7 @@ static int prctl_set_vma(unsigned long opt, unsigned long start,
 		error = -EINVAL;
 	}
 
-	mmap_write_unlock(mm);
+	up_write(&mm->mmap_sem);
 
 	return error;
 }
@@ -2583,13 +2583,13 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 	case PR_SET_THP_DISABLE:
 		if (arg3 || arg4 || arg5)
 			return -EINVAL;
-		if (mmap_write_lock_killable(me->mm))
+		if (down_write_killable(&me->mm->mmap_sem))
 			return -EINTR;
 		if (arg2)
 			set_bit(MMF_DISABLE_THP, &me->mm->flags);
 		else
 			clear_bit(MMF_DISABLE_THP, &me->mm->flags);
-		mmap_write_unlock(me->mm);
+		up_write(&me->mm->mmap_sem);
 		break;
 	case PR_MPX_ENABLE_MANAGEMENT:
 	case PR_MPX_DISABLE_MANAGEMENT:
@@ -2635,11 +2635,6 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 			return -EINVAL;
 		error = GET_TAGGED_ADDR_CTRL();
 		break;
-#ifdef CONFIG_SCHED_CORE
-	case PR_SCHED_CORE:
-		error = sched_core_share_pid(arg2, arg3, arg4, arg5);
-		break;
-#endif
 	default:
 		error = -EINVAL;
 		break;

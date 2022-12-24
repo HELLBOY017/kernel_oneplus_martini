@@ -238,10 +238,6 @@ enum {
 					 * condition of read on truncated area
 					 * by extent_cache
 					 */
-	DATA_GENERIC_ENHANCE_UPDATE,	/*
-					 * strong check on range and segment
-					 * bitmap for update case
-					 */
 	META_GENERIC,
 };
 
@@ -612,8 +608,8 @@ enum {
 
 #define DEFAULT_RETRY_IO_COUNT	8	/* maximum retry read IO count */
 
-/* congestion wait timeout value, default: 6ms */
-#define	DEFAULT_IO_TIMEOUT	(msecs_to_jiffies(6))
+/* congestion wait timeout value, default: 20ms */
+#define	DEFAULT_IO_TIMEOUT	(msecs_to_jiffies(20))
 
 /* maximum retry quota flush count */
 #define DEFAULT_RETRY_QUOTA_FLUSH_COUNT		8
@@ -1612,8 +1608,6 @@ struct f2fs_sb_info {
 
 	struct kmem_cache *inline_xattr_slab;	/* inline xattr entry */
 	unsigned int inline_xattr_slab_size;	/* default inline xattr slab size */
-
-	unsigned long seq_file_ra_mul;		/* multiplier for ra_pages of seq. files in fadvise */
 };
 
 struct f2fs_private_dio {
@@ -3858,9 +3852,6 @@ void f2fs_destroy_extent_cache(void);
 /*
  * sysfs.c
  */
-#define MIN_RA_MUL	2
-#define MAX_RA_MUL	256
-
 int __init f2fs_init_sysfs(void);
 void f2fs_exit_sysfs(void);
 int f2fs_register_sysfs(struct f2fs_sb_info *sbi);

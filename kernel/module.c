@@ -3399,7 +3399,7 @@ static int find_module_sections(struct module *mod, struct load_info *info)
 	if (section_addr(info, "__obsparm"))
 		pr_warn("%s: Ignoring obsolete parameters\n", mod->name);
 
-	info->debug = section_objs(info, "__dyndbg",
+	info->debug = section_objs(info, "__verbose",
 				   sizeof(*info->debug), &info->num_debug);
 
 	return 0;
@@ -4585,17 +4585,16 @@ static int modules_open(struct inode *inode, struct file *file)
 	return err;
 }
 
-static const struct proc_ops modules_proc_ops = {
-	.proc_flags	= PROC_ENTRY_PERMANENT,
-	.proc_open	= modules_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= seq_release,
+static const struct file_operations proc_modules_operations = {
+	.open		= modules_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= seq_release,
 };
 
 static int __init proc_modules_init(void)
 {
-	proc_create("modules", 0, NULL, &modules_proc_ops);
+	proc_create("modules", 0, NULL, &proc_modules_operations);
 	return 0;
 }
 module_init(proc_modules_init);

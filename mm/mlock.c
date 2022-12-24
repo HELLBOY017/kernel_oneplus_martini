@@ -108,12 +108,13 @@ void mlock_vma_page(struct page *page)
  */
 static bool __munlock_isolate_lru_page(struct page *page, bool getpage)
 {
-	if (TestClearPageLRU(page)) {
+	if (PageLRU(page)) {
 		struct lruvec *lruvec;
 
 		lruvec = mem_cgroup_page_lruvec(page, page_pgdat(page));
 		if (getpage)
 			get_page(page);
+		ClearPageLRU(page);
 		del_page_from_lru_list(page, lruvec, page_lru(page));
 		return true;
 	}
@@ -688,7 +689,7 @@ static __must_check int do_mlock(unsigned long start, size_t len, vm_flags_t fla
 	lock_limit >>= PAGE_SHIFT;
 	locked = len >> PAGE_SHIFT;
 
-	if (mmap_write_lock_killable(current->mm))
+	if (down_write_killable(&current->mm->mmap_sem))
 		return -EINTR;
 
 	locked += current->mm->locked_vm;
@@ -707,7 +708,7 @@ static __must_check int do_mlock(unsigned long start, size_t len, vm_flags_t fla
 	if ((locked <= lock_limit) || capable(CAP_IPC_LOCK))
 		error = apply_vma_lock_flags(start, len, flags);
 
-	mmap_write_unlock(current->mm);
+	up_write(&current->mm->mmap_sem);
 	if (error)
 		return error;
 
@@ -744,10 +745,10 @@ SYSCALL_DEFINE2(munlock, unsigned long, start, size_t, len)
 	len = PAGE_ALIGN(len + (offset_in_page(start)));
 	start &= PAGE_MASK;
 
-	if (mmap_write_lock_killable(current->mm))
+	if (down_write_killable(&current->mm->mmap_sem))
 		return -EINTR;
 	ret = apply_vma_lock_flags(start, len, 0);
-	mmap_write_unlock(current->mm);
+	up_write(&current->mm->mmap_sem);
 
 	return ret;
 }
@@ -813,14 +814,14 @@ SYSCALL_DEFINE1(mlockall, int, flags)
 	lock_limit = rlimit(RLIMIT_MEMLOCK);
 	lock_limit >>= PAGE_SHIFT;
 
-	if (mmap_write_lock_killable(current->mm))
+	if (down_write_killable(&current->mm->mmap_sem))
 		return -EINTR;
 
 	ret = -ENOMEM;
 	if (!(flags & MCL_CURRENT) || (current->mm->total_vm <= lock_limit) ||
 	    capable(CAP_IPC_LOCK))
 		ret = apply_mlockall_flags(flags);
-	mmap_write_unlock(current->mm);
+	up_write(&current->mm->mmap_sem);
 	if (!ret && (flags & MCL_CURRENT))
 		mm_populate(0, TASK_SIZE);
 
@@ -831,10 +832,10 @@ SYSCALL_DEFINE0(munlockall)
 {
 	int ret;
 
-	if (mmap_write_lock_killable(current->mm))
+	if (down_write_killable(&current->mm->mmap_sem))
 		return -EINTR;
 	ret = apply_mlockall_flags(0);
-	mmap_write_unlock(current->mm);
+	up_write(&current->mm->mmap_sem);
 	return ret;
 }
 

@@ -3,13 +3,11 @@
  * Copyright (C) 2018-2020 Oplus. All rights reserved.
  */
 
-#ifndef _OPLUS_VOOC_ADAPTER_H_
-#define _OPLUS_VOOC_ADAPTER_H_
+#ifndef _OPLUS_WARP_ADAPTER_H_
+#define _OPLUS_WARP_ADAPTER_H_
 
-#include "../oplus_vooc.h"
+#include "../oplus_warp.h"
 
-
-//ap_data---->rx     ap_clk---->tx
 #define BIT_0						0
 #define BIT_1						1
 #define BIT_2						2
@@ -54,14 +52,13 @@
 #define Boot_Over_Cmd             	0xF506
 #define Last_Line_Addr				0x9FF0
 
-#define Read_Addr_Line_Cmd_Count	2000		//physical test: 27
-#define Write_Addr_Line_Cmd_Count	18000		//physical test:8720
-#define Erase_Addr_Line_Cmd_Count	16000		//physical test:7657
-#define Read_All_Cmd_Count			2000		//physical test:27
-#define Erase_All_Cmd_Count			180000		//physical test:86916
-#define Boot_Over_Cmd_Count			2000		//physical test:34
+#define Read_Addr_Line_Cmd_Count	2000
+#define Write_Addr_Line_Cmd_Count	18000
+#define Erase_Addr_Line_Cmd_Count	16000
+#define Read_All_Cmd_Count			2000
+#define Erase_All_Cmd_Count			180000
+#define Boot_Over_Cmd_Count			2000
 #define Other_Cmd_count				2000
-
 
 struct chip_stm {
         struct i2c_client           *client;
@@ -76,8 +73,6 @@ struct chip_stm {
 		unsigned int	 			adapter_fw_data_count;
 		bool		 				adapter_update_ing;
 };
-
-//fw_ver must be 0x0b/0x0c/0x0d/0x0e/0x0f because of pic1508/stm8s
 
 static unsigned char adapter_stm8s_firmware_data[] = {
 0x00,0x8c,0x82,0x00,0x9F,0x20,0x82,0x00,0x9F,0xCF,0x82,0x00,0x9F,0xCF,0x82,0x00,0x9F,0xCF,0x82,0x00,0x9F,0xCF,0x82,0x00,0x9F,0xCF,0x82,0x00,0x9F,0xCF,0x82,0x00,0x9F,0xCF,
@@ -244,4 +239,3 @@ static unsigned char adapter_stm8s_firmware_data[] = {
 };
 
 #endif
-

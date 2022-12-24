@@ -135,11 +135,7 @@ static const int hrtimer_clock_to_base_table[MAX_CLOCKS] = {
  * timer->base->cpu_base
  */
 static struct hrtimer_cpu_base migration_cpu_base = {
-	.clock_base = { {
-		.cpu_base = &migration_cpu_base,
-		.seq      = SEQCNT_RAW_SPINLOCK_ZERO(migration_cpu_base.seq,
-						     &migration_cpu_base.lock),
-	}, },
+	.clock_base = { { .cpu_base = &migration_cpu_base, }, },
 };
 
 #define migration_base	migration_cpu_base.clock_base[0]
@@ -1481,7 +1477,7 @@ static void __hrtimer_init(struct hrtimer *timer, clockid_t clock_id,
 	base = softtimer ? HRTIMER_MAX_CLOCK_BASES / 2 : 0;
 	base += hrtimer_clockid_to_base(clock_id);
 	timer->is_soft = softtimer;
-	timer->is_hard = !!(mode & HRTIMER_MODE_HARD);
+	timer->is_hard = !softtimer;
 	timer->base = &cpu_base->clock_base[base];
 	timerqueue_init(&timer->node);
 }
@@ -1591,11 +1587,7 @@ static void __run_hrtimer(struct hrtimer_cpu_base *cpu_base,
 	 */
 	raw_spin_unlock_irqrestore(&cpu_base->lock, flags);
 	trace_hrtimer_expire_entry(timer, now);
-	lockdep_hrtimer_enter(timer);
-
 	restart = fn(timer);
-
-	lockdep_hrtimer_exit(timer);
 	trace_hrtimer_expire_exit(timer);
 	raw_spin_lock_irq(&cpu_base->lock);
 
@@ -2072,11 +2064,8 @@ int hrtimers_prepare_cpu(unsigned int cpu)
 	int i;
 
 	for (i = 0; i < HRTIMER_MAX_CLOCK_BASES; i++) {
-		struct hrtimer_clock_base *clock_b = &cpu_base->clock_base[i];
-
-		clock_b->cpu_base = cpu_base;
-		seqcount_raw_spinlock_init(&clock_b->seq, &cpu_base->lock);
-		timerqueue_init_head(&clock_b->active);
+		cpu_base->clock_base[i].cpu_base = cpu_base;
+		timerqueue_init_head(&cpu_base->clock_base[i].active);
 	}
 
 	cpu_base->cpu = cpu;
@@ -2091,7 +2080,7 @@ int hrtimers_prepare_cpu(unsigned int cpu)
 	return 0;
 }
 
-#if defined(CONFIG_HOTPLUG_CPU) || defined(CONFIG_CPUSETS)
+#ifdef CONFIG_HOTPLUG_CPU
 static void migrate_hrtimer_list(struct hrtimer_clock_base *old_base,
 				 struct hrtimer_clock_base *new_base,
 				 bool remove_pinned)
@@ -2100,12 +2089,14 @@ static void migrate_hrtimer_list(struct hrtimer_clock_base *old_base,
 	struct timerqueue_node *node;
 	struct timerqueue_head pinned;
 	int is_pinned;
+	bool is_hotplug = !cpu_online(old_base->cpu_base->cpu);
 
 	timerqueue_init_head(&pinned);
 
 	while ((node = timerqueue_getnext(&old_base->active))) {
 		timer = container_of(node, struct hrtimer, node);
-		BUG_ON(hrtimer_callback_running(timer));
+		if (is_hotplug)
+			BUG_ON(hrtimer_callback_running(timer));
 		debug_deactivate(timer);
 
 		/*
@@ -2176,9 +2167,7 @@ static void __migrate_hrtimers(unsigned int scpu, bool remove_pinned)
 	__hrtimer_peek_ahead_timers();
 	local_irq_restore(flags);
 }
-#endif /* CONFIG_HOTPLUG_CPU || CONFIG_CPUSETS */
 
-#ifdef CONFIG_HOTPLUG_CPU
 int hrtimers_dead_cpu(unsigned int scpu)
 {
 	BUG_ON(cpu_online(scpu));
@@ -2194,14 +2183,13 @@ int hrtimers_dead_cpu(unsigned int scpu)
 	local_bh_enable();
 	return 0;
 }
-#endif /* CONFIG_HOTPLUG_CPU */
 
-#ifdef CONFIG_CPUSETS
 void hrtimer_quiesce_cpu(void *cpup)
 {
 	__migrate_hrtimers(*(int *)cpup, false);
 }
-#endif /* CONFIG_CPUSETS */
+
+#endif /* CONFIG_HOTPLUG_CPU */
 
 void __init hrtimers_init(void)
 {

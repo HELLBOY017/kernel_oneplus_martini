@@ -756,9 +756,9 @@ int kvm_vm_ioctl_enable_cap(struct kvm *kvm, struct kvm_enable_cap *cap)
 			r = -EINVAL;
 		else {
 			r = 0;
-			mmap_write_lock(kvm->mm);
+			down_write(&kvm->mm->mmap_sem);
 			kvm->mm->context.allow_gmap_hpage_1m = 1;
-			mmap_write_unlock(kvm->mm);
+			up_write(&kvm->mm->mmap_sem);
 			/*
 			 * We might have to create fake 4k page
 			 * tables. To avoid that the hardware works on
@@ -1808,7 +1808,7 @@ static long kvm_s390_get_skeys(struct kvm *kvm, struct kvm_s390_skeys *args)
 	if (!keys)
 		return -ENOMEM;
 
-	mmap_read_lock(current->mm);
+	down_read(&current->mm->mmap_sem);
 	srcu_idx = srcu_read_lock(&kvm->srcu);
 	for (i = 0; i < args->count; i++) {
 		hva = gfn_to_hva(kvm, args->start_gfn + i);
@@ -1822,7 +1822,7 @@ static long kvm_s390_get_skeys(struct kvm *kvm, struct kvm_s390_skeys *args)
 			break;
 	}
 	srcu_read_unlock(&kvm->srcu, srcu_idx);
-	mmap_read_unlock(current->mm);
+	up_read(&current->mm->mmap_sem);
 
 	if (!r) {
 		r = copy_to_user((uint8_t __user *)args->skeydata_addr, keys,
@@ -1866,7 +1866,7 @@ static long kvm_s390_set_skeys(struct kvm *kvm, struct kvm_s390_skeys *args)
 		goto out;
 
 	i = 0;
-	mmap_read_lock(current->mm);
+	down_read(&current->mm->mmap_sem);
 	srcu_idx = srcu_read_lock(&kvm->srcu);
         while (i < args->count) {
 		unlocked = false;
@@ -1893,7 +1893,7 @@ static long kvm_s390_set_skeys(struct kvm *kvm, struct kvm_s390_skeys *args)
 			i++;
 	}
 	srcu_read_unlock(&kvm->srcu, srcu_idx);
-	mmap_read_unlock(current->mm);
+	up_read(&current->mm->mmap_sem);
 out:
 	kvfree(keys);
 	return r;
@@ -2079,14 +2079,14 @@ static int kvm_s390_get_cmma_bits(struct kvm *kvm,
 	if (!values)
 		return -ENOMEM;
 
-	mmap_read_lock(kvm->mm);
+	down_read(&kvm->mm->mmap_sem);
 	srcu_idx = srcu_read_lock(&kvm->srcu);
 	if (peek)
 		ret = kvm_s390_peek_cmma(kvm, args, values, bufsize);
 	else
 		ret = kvm_s390_get_cmma(kvm, args, values, bufsize);
 	srcu_read_unlock(&kvm->srcu, srcu_idx);
-	mmap_read_unlock(kvm->mm);
+	up_read(&kvm->mm->mmap_sem);
 
 	if (kvm->arch.migration_mode)
 		args->remaining = atomic64_read(&kvm->arch.cmma_dirty_pages);
@@ -2136,7 +2136,7 @@ static int kvm_s390_set_cmma_bits(struct kvm *kvm,
 		goto out;
 	}
 
-	mmap_read_lock(kvm->mm);
+	down_read(&kvm->mm->mmap_sem);
 	srcu_idx = srcu_read_lock(&kvm->srcu);
 	for (i = 0; i < args->count; i++) {
 		hva = gfn_to_hva(kvm, args->start_gfn + i);
@@ -2151,12 +2151,12 @@ static int kvm_s390_set_cmma_bits(struct kvm *kvm,
 		set_pgste_bits(kvm->mm, hva, mask, pgstev);
 	}
 	srcu_read_unlock(&kvm->srcu, srcu_idx);
-	mmap_read_unlock(kvm->mm);
+	up_read(&kvm->mm->mmap_sem);
 
 	if (!kvm->mm->context.uses_cmm) {
-		mmap_write_lock(kvm->mm);
+		down_write(&kvm->mm->mmap_sem);
 		kvm->mm->context.uses_cmm = 1;
-		mmap_write_unlock(kvm->mm);
+		up_write(&kvm->mm->mmap_sem);
 	}
 out:
 	vfree(bits);

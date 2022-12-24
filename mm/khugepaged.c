@@ -311,6 +311,8 @@ struct attribute_group khugepaged_attr_group = {
 };
 #endif /* CONFIG_SYSFS */
 
+#define VM_NO_KHUGEPAGED (VM_SPECIAL | VM_HUGETLB)
+
 int hugepage_madvise(struct vm_area_struct *vma,
 		     unsigned long *vm_flags, int advice)
 {
@@ -424,7 +426,7 @@ static bool hugepage_vma_check(struct vm_area_struct *vma,
 	}
 	if (!vma->anon_vma || vma->vm_ops)
 		return false;
-	if (vma_is_temporary_stack(vma))
+	if (is_vma_temporary_stack(vma))
 		return false;
 	return !(vm_flags & VM_NO_KHUGEPAGED);
 }
@@ -509,8 +511,8 @@ void __khugepaged_exit(struct mm_struct *mm)
 		 * khugepaged has finished working on the pagetables
 		 * under the mmap_sem.
 		 */
-		mmap_write_lock(mm);
-		mmap_write_unlock(mm);
+		down_write(&mm->mmap_sem);
+		up_write(&mm->mmap_sem);
 	}
 }
 
@@ -936,7 +938,7 @@ static bool __collapse_huge_page_swapin(struct mm_struct *mm,
 
 		/* do_swap_page returns VM_FAULT_RETRY with released mmap_sem */
 		if (ret & VM_FAULT_RETRY) {
-			mmap_read_lock(mm);
+			down_read(&mm->mmap_sem);
 			if (hugepage_vma_revalidate(mm, address, &vmf.vma)) {
 				/* vma is no longer available, don't continue to swapin */
 				trace_mm_collapse_huge_page_swapin(mm, swapped_in, referenced, 0);
@@ -988,7 +990,7 @@ static void collapse_huge_page(struct mm_struct *mm,
 	 * sync compaction, and we do not need to hold the mmap_sem during
 	 * that. We will recheck the vma after taking it again in write mode.
 	 */
-	mmap_read_unlock(mm);
+	up_read(&mm->mmap_sem);
 	new_page = khugepaged_alloc_page(hpage, gfp, node);
 	if (!new_page) {
 		result = SCAN_ALLOC_HUGE_PAGE_FAIL;
@@ -1000,11 +1002,11 @@ static void collapse_huge_page(struct mm_struct *mm,
 		goto out_nolock;
 	}
 
-	mmap_read_lock(mm);
+	down_read(&mm->mmap_sem);
 	result = hugepage_vma_revalidate(mm, address, &vma);
 	if (result) {
 		mem_cgroup_cancel_charge(new_page, memcg, true);
-		mmap_read_unlock(mm);
+		up_read(&mm->mmap_sem);
 		goto out_nolock;
 	}
 
@@ -1012,7 +1014,7 @@ static void collapse_huge_page(struct mm_struct *mm,
 	if (!pmd) {
 		result = SCAN_PMD_NULL;
 		mem_cgroup_cancel_charge(new_page, memcg, true);
-		mmap_read_unlock(mm);
+		up_read(&mm->mmap_sem);
 		goto out_nolock;
 	}
 
@@ -1023,17 +1025,17 @@ static void collapse_huge_page(struct mm_struct *mm,
 	 */
 	if (!__collapse_huge_page_swapin(mm, vma, address, pmd, referenced)) {
 		mem_cgroup_cancel_charge(new_page, memcg, true);
-		mmap_read_unlock(mm);
+		up_read(&mm->mmap_sem);
 		goto out_nolock;
 	}
 
-	mmap_read_unlock(mm);
+	up_read(&mm->mmap_sem);
 	/*
 	 * Prevent all access to pagetables with the exception of
 	 * gup_fast later handled by the ptep_clear_flush and the VM
 	 * handled by the anon_vma lock + PG_lock.
 	 */
-	mmap_write_lock(mm);
+	down_write(&mm->mmap_sem);
 	result = hugepage_vma_revalidate(mm, address, &vma);
 	if (result)
 		goto out;
@@ -1121,7 +1123,7 @@ static void collapse_huge_page(struct mm_struct *mm,
 	khugepaged_pages_collapsed++;
 	result = SCAN_SUCCEED;
 out_up_write:
-	mmap_write_unlock(mm);
+	up_write(&mm->mmap_sem);
 out_nolock:
 	trace_mm_collapse_huge_page(mm, isolated, result);
 	return;
@@ -1411,7 +1413,7 @@ static int khugepaged_collapse_pte_mapped_thps(struct mm_slot *mm_slot)
 	if (likely(mm_slot->nr_pte_mapped_thp == 0))
 		return 0;
 
-	if (!mmap_write_trylock(mm))
+	if (!down_write_trylock(&mm->mmap_sem))
 		return -EBUSY;
 
 	if (unlikely(khugepaged_test_exit(mm)))
@@ -1422,7 +1424,7 @@ static int khugepaged_collapse_pte_mapped_thps(struct mm_slot *mm_slot)
 
 out:
 	mm_slot->nr_pte_mapped_thp = 0;
-	mmap_write_unlock(mm);
+	up_write(&mm->mmap_sem);
 	return 0;
 }
 
@@ -1469,7 +1471,7 @@ static void retract_page_tables(struct address_space *mapping, pgoff_t pgoff)
 		 * mmap_sem while holding page lock. Fault path does it in
 		 * reverse order. Trylock is a way to avoid deadlock.
 		 */
-		if (mmap_write_trylock(mm)) {
+		if (down_write_trylock(&mm->mmap_sem)) {
 			if (!khugepaged_test_exit(mm)) {
 				spinlock_t *ptl = pmd_lock(mm, pmd);
 				/* assume page table is clear */
@@ -1478,7 +1480,7 @@ static void retract_page_tables(struct address_space *mapping, pgoff_t pgoff)
 				mm_dec_nr_ptes(mm);
 				pte_free(mm, pmd_pgtable(_pmd));
 			}
-			mmap_write_unlock(mm);
+			up_write(&mm->mmap_sem);
 		} else {
 			/* Try again later */
 			khugepaged_add_pte_mapped_thp(mm, addr);

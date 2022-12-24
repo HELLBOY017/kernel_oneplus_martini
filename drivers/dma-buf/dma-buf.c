@@ -259,7 +259,7 @@ static __poll_t dma_buf_poll(struct file *file, poll_table *poll)
 		return 0;
 
 retry:
-	seq = read_seqbegin(&resv->seq);
+	seq = read_seqcount_begin(&resv->seq);
 	rcu_read_lock();
 
 	fobj = rcu_dereference(resv->fence);
@@ -268,7 +268,7 @@ retry:
 	else
 		shared_count = 0;
 	fence_excl = rcu_dereference(resv->fence_excl);
-	if (read_seqretry(&resv->seq, seq)) {
+	if (read_seqcount_retry(&resv->seq, seq)) {
 		rcu_read_unlock();
 		goto retry;
 	}
@@ -379,7 +379,7 @@ static long dma_buf_set_name(struct dma_buf *dmabuf, const char __user *buf)
 	if (IS_ERR(name))
 		return PTR_ERR(name);
 
-	dma_resv_lock(dmabuf->resv, NULL);
+	mutex_lock(&dmabuf->lock);
 	if (!list_empty(&dmabuf->attachments)) {
 		ret = -EBUSY;
 		kfree(name);
@@ -391,7 +391,7 @@ static long dma_buf_set_name(struct dma_buf *dmabuf, const char __user *buf)
 	spin_unlock(&dmabuf->name_lock);
 
 out_unlock:
-	dma_resv_unlock(dmabuf->resv);
+	mutex_unlock(&dmabuf->lock);
 	return ret;
 }
 
@@ -463,7 +463,9 @@ static const struct file_operations dma_buf_fops = {
 	.llseek		= dma_buf_llseek,
 	.poll		= dma_buf_poll,
 	.unlocked_ioctl	= dma_buf_ioctl,
-	.compat_ioctl	= compat_ptr_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl	= dma_buf_ioctl,
+#endif
 	.show_fdinfo	= dma_buf_show_fdinfo,
 };
 
@@ -571,10 +573,6 @@ struct dma_buf *dma_buf_export(const struct dma_buf_export_info *exp_info)
 			  || !exp_info->ops->release)) {
 		return ERR_PTR(-EINVAL);
 	}
-
-	if (WARN_ON(exp_info->ops->cache_sgt_mapping &&
-		    exp_info->ops->dynamic_mapping))
-		return ERR_PTR(-EINVAL);
 
 	if (!try_module_get(exp_info->owner))
 		return ERR_PTR(-ENOENT);
@@ -735,11 +733,10 @@ void dma_buf_put_sync(struct dma_buf *dmabuf)
 }
 
 /**
- * dma_buf_dynamic_attach - Add the device to dma_buf's attachments list; optionally,
+ * dma_buf_attach - Add the device to dma_buf's attachments list; optionally,
  * calls attach() of dma_buf_ops to allow device-specific attach functionality
- * @dmabuf:		[in]	buffer to attach device to.
- * @dev:		[in]	device to be attached.
- * @dynamic_mapping:	[in]	calling convention for map/unmap
+ * @dmabuf:	[in]	buffer to attach device to.
+ * @dev:	[in]	device to be attached.
  *
  * Returns struct dma_buf_attachment pointer for this attachment. Attachments
  * must be cleaned up by calling dma_buf_detach().
@@ -753,9 +750,8 @@ void dma_buf_put_sync(struct dma_buf *dmabuf)
  * accessible to @dev, and cannot be moved to a more suitable place. This is
  * indicated with the error code -EBUSY.
  */
-struct dma_buf_attachment *
-dma_buf_dynamic_attach(struct dma_buf *dmabuf, struct device *dev,
-		       bool dynamic_mapping)
+struct dma_buf_attachment *dma_buf_attach(struct dma_buf *dmabuf,
+					  struct device *dev)
 {
 	struct dma_buf_attachment *attach;
 	int ret;
@@ -769,68 +765,24 @@ dma_buf_dynamic_attach(struct dma_buf *dmabuf, struct device *dev,
 
 	attach->dev = dev;
 	attach->dmabuf = dmabuf;
-	attach->dynamic_mapping = dynamic_mapping;
+
+	mutex_lock(&dmabuf->lock);
 
 	if (dmabuf->ops->attach) {
 		ret = dmabuf->ops->attach(dmabuf, attach);
 		if (ret)
 			goto err_attach;
 	}
-	dma_resv_lock(dmabuf->resv, NULL);
 	list_add(&attach->node, &dmabuf->attachments);
-	dma_resv_unlock(dmabuf->resv);
 
-	/* When either the importer or the exporter can't handle dynamic
-	 * mappings we cache the mapping here to avoid issues with the
-	 * reservation object lock.
-	 */
-	if (dma_buf_attachment_is_dynamic(attach) !=
-	    dma_buf_is_dynamic(dmabuf)) {
-		struct sg_table *sgt;
-
-		if (dma_buf_is_dynamic(attach->dmabuf))
-			dma_resv_lock(attach->dmabuf->resv, NULL);
-
-		sgt = dmabuf->ops->map_dma_buf(attach, DMA_BIDIRECTIONAL);
-		if (!sgt)
-			sgt = ERR_PTR(-ENOMEM);
-		if (IS_ERR(sgt)) {
-			ret = PTR_ERR(sgt);
-			goto err_unlock;
-		}
-		if (dma_buf_is_dynamic(attach->dmabuf))
-			dma_resv_unlock(attach->dmabuf->resv);
-		attach->sgt = sgt;
-		attach->dir = DMA_BIDIRECTIONAL;
-	}
+	mutex_unlock(&dmabuf->lock);
 
 	return attach;
 
 err_attach:
 	kfree(attach);
+	mutex_unlock(&dmabuf->lock);
 	return ERR_PTR(ret);
-
-err_unlock:
-	if (dma_buf_is_dynamic(attach->dmabuf))
-		dma_resv_unlock(attach->dmabuf->resv);
-
-	dma_buf_detach(dmabuf, attach);
-	return ERR_PTR(ret);
-}
-EXPORT_SYMBOL_GPL(dma_buf_dynamic_attach);
-
-/**
- * dma_buf_attach - Wrapper for dma_buf_dynamic_attach
- * @dmabuf:	[in]	buffer to attach device to.
- * @dev:	[in]	device to be attached.
- *
- * Wrapper to call dma_buf_dynamic_attach() for drivers which still use a static
- * mapping.
- */
-struct dma_buf_attachment *dma_buf_attach(struct dma_buf *dmabuf,
-					  struct device *dev)
-{
-	return dma_buf_dynamic_attach(dmabuf, dev, false);
 }
 EXPORT_SYMBOL_GPL(dma_buf_attach);
 
@@ -847,22 +799,15 @@ void dma_buf_detach(struct dma_buf *dmabuf, struct dma_buf_attachment *attach)
 	if (WARN_ON(!dmabuf || !attach))
 		return;
 
-	if (attach->sgt) {
-		if (dma_buf_is_dynamic(attach->dmabuf))
-			dma_resv_lock(attach->dmabuf->resv, NULL);
-
+	if (attach->sgt)
 		dmabuf->ops->unmap_dma_buf(attach, attach->sgt, attach->dir);
 
-		if (dma_buf_is_dynamic(attach->dmabuf))
-			dma_resv_unlock(attach->dmabuf->resv);
-	}
-
-	dma_resv_lock(dmabuf->resv, NULL);
+	mutex_lock(&dmabuf->lock);
 	list_del(&attach->node);
-	dma_resv_unlock(dmabuf->resv);
 	if (dmabuf->ops->detach)
 		dmabuf->ops->detach(dmabuf, attach);
 
+	mutex_unlock(&dmabuf->lock);
 	kfree(attach);
 }
 EXPORT_SYMBOL_GPL(dma_buf_detach);
@@ -892,9 +837,6 @@ struct sg_table *dma_buf_map_attachment(struct dma_buf_attachment *attach,
 	if (WARN_ON(!attach || !attach->dmabuf))
 		return ERR_PTR(-EINVAL);
 
-	if (dma_buf_attachment_is_dynamic(attach))
-		dma_resv_assert_held(attach->dmabuf->resv);
-
 	if (attach->sgt) {
 		/*
 		 * Two mappings with different directions for the same
@@ -906,9 +848,6 @@ struct sg_table *dma_buf_map_attachment(struct dma_buf_attachment *attach,
 
 		return attach->sgt;
 	}
-
-	if (dma_buf_is_dynamic(attach->dmabuf))
-		dma_resv_assert_held(attach->dmabuf->resv);
 
 	sg_table = attach->dmabuf->ops->map_dma_buf(attach, direction);
 	if (!sg_table)
@@ -942,14 +881,8 @@ void dma_buf_unmap_attachment(struct dma_buf_attachment *attach,
 	if (WARN_ON(!attach || !attach->dmabuf || !sg_table))
 		return;
 
-	if (dma_buf_attachment_is_dynamic(attach))
-		dma_resv_assert_held(attach->dmabuf->resv);
-
 	if (attach->sgt == sg_table)
 		return;
-
-	if (dma_buf_is_dynamic(attach->dmabuf))
-		dma_resv_assert_held(attach->dmabuf->resv);
 
 	attach->dmabuf->ops->unmap_dma_buf(attach, sg_table, direction);
 }
@@ -1233,6 +1166,9 @@ EXPORT_SYMBOL_GPL(dma_buf_kunmap);
 int dma_buf_mmap(struct dma_buf *dmabuf, struct vm_area_struct *vma,
 		 unsigned long pgoff)
 {
+	struct file *oldfile;
+	int ret;
+
 	if (WARN_ON(!dmabuf || !vma))
 		return -EINVAL;
 
@@ -1250,10 +1186,22 @@ int dma_buf_mmap(struct dma_buf *dmabuf, struct vm_area_struct *vma,
 		return -EINVAL;
 
 	/* readjust the vma */
-	vma_set_file(vma, dmabuf->file);
+	get_file(dmabuf->file);
+	oldfile = vma->vm_file;
+	vma->vm_file = dmabuf->file;
 	vma->vm_pgoff = pgoff;
 
-	return dmabuf->ops->mmap(dmabuf, vma);
+	ret = dmabuf->ops->mmap(dmabuf, vma);
+	if (ret) {
+		/* restore old parameters on failure */
+		vma->vm_file = oldfile;
+		fput(dmabuf->file);
+	} else {
+		if (oldfile)
+			fput(oldfile);
+	}
+	return ret;
+
 }
 EXPORT_SYMBOL_GPL(dma_buf_mmap);
 
@@ -1377,10 +1325,13 @@ static int dma_buf_debug_show(struct seq_file *s, void *unused)
 		   "size", "flags", "mode", "count", "ino");
 
 	list_for_each_entry(buf_obj, &db_list.head, list_node) {
+		ret = mutex_lock_interruptible(&buf_obj->lock);
 
-		ret = dma_resv_lock_interruptible(buf_obj->resv, NULL);
-		if (ret)
-			goto error_unlock;
+		if (ret) {
+			seq_puts(s,
+				 "\tERROR locking buffer object: skipping\n");
+			continue;
+		}
 
 		seq_printf(s, "%08zu\t%08x\t%08x\t%08ld\t%s\t%08lu\t%s\n",
 				buf_obj->size,
@@ -1392,12 +1343,12 @@ static int dma_buf_debug_show(struct seq_file *s, void *unused)
 
 		robj = buf_obj->resv;
 		while (true) {
-			seq = read_seqbegin(&robj->seq);
+			seq = read_seqcount_begin(&robj->seq);
 			rcu_read_lock();
 			fobj = rcu_dereference(robj->fence);
 			shared_count = fobj ? fobj->shared_count : 0;
 			fence = rcu_dereference(robj->fence_excl);
-			if (!read_seqretry(&robj->seq, seq))
+			if (!read_seqcount_retry(&robj->seq, seq))
 				break;
 			rcu_read_unlock();
 		}
@@ -1426,7 +1377,6 @@ static int dma_buf_debug_show(struct seq_file *s, void *unused)
 			seq_printf(s, "\t%s\n", dev_name(attach_obj->dev));
 			attach_count++;
 		}
-		dma_resv_unlock(buf_obj->resv);
 
 		seq_printf(s, "Total %d devices attached\n\n",
 				attach_count);
@@ -1435,16 +1385,13 @@ static int dma_buf_debug_show(struct seq_file *s, void *unused)
 
 		count++;
 		size += buf_obj->size;
+		mutex_unlock(&buf_obj->lock);
 	}
 
 	seq_printf(s, "\nTotal %d objects, %zu bytes\n", count, size);
 
 	mutex_unlock(&db_list.lock);
 	return 0;
-
-error_unlock:
-	mutex_unlock(&db_list.lock);
-	return ret;
 }
 
 DEFINE_SHOW_ATTRIBUTE(dma_buf_debug);

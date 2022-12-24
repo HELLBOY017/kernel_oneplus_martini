@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
  */
 
 #define pr_fmt(fmt) "arm-memlat-mon: " fmt
@@ -131,6 +131,7 @@ struct memlat_cpu_grp {
 	cpumask_t		cpus;
 	unsigned int		common_ev_ids[NUM_COMMON_EVS];
 	struct cpu_data		*cpus_data;
+	int			read_event_cpu;
 	ktime_t			last_update_ts;
 	unsigned long		last_ts_delta_us;
 
@@ -173,11 +174,13 @@ static inline void read_event(struct event_data *event)
 		return;
 
 	if (!per_cpu(cpu_is_idle, event->pevent->cpu) &&
-			!per_cpu(cpu_is_hp, event->pevent->cpu))
+			!per_cpu(cpu_is_hp, event->pevent->cpu)) {
 		total = perf_event_read_value(event->pevent, &enabled,
 								&running);
-	else
+		event->cached_total_count = total;
+	} else {
 		total = event->cached_total_count;
+	}
 	event->last_delta = total - event->prev_count;
 	event->prev_count = total;
 }
@@ -196,8 +199,11 @@ static void update_counts(struct memlat_cpu_grp *cpu_grp)
 		struct cpu_data *cpu_data = to_cpu_data(cpu_grp, cpu);
 		struct event_data *common_evs = cpu_data->common_evs;
 
-		for (i = 0; i < NUM_COMMON_EVS; i++)
+		for (i = 0; i < NUM_COMMON_EVS; i++) {
+			cpu_grp->read_event_cpu = cpu;
 			read_event(&common_evs[i]);
+			cpu_grp->read_event_cpu = -1;
+		}
 
 		if (!common_evs[STALL_IDX].pevent)
 			common_evs[STALL_IDX].last_delta =
@@ -218,11 +224,13 @@ static void update_counts(struct memlat_cpu_grp *cpu_grp)
 		for_each_cpu(cpu, &mon->cpus) {
 			unsigned int mon_idx =
 				cpu - cpumask_first(&mon->cpus);
+			cpu_grp->read_event_cpu = cpu;
 			read_event(&mon->miss_ev[mon_idx]);
 			if (mon->wb_ev_id && mon->access_ev_id) {
 				read_event(&mon->wb_ev[mon_idx]);
 				read_event(&mon->access_ev[mon_idx]);
 			}
+			cpu_grp->read_event_cpu = -1;
 		}
 	}
 }
@@ -794,6 +802,8 @@ static int memlat_cpu_grp_probe(struct platform_device *pdev)
 		dev_err(dev, "No CPUs specified.\n");
 		return -ENODEV;
 	}
+
+	cpu_grp->read_event_cpu = -1;
 
 	num_mons = of_get_available_child_count(dev->of_node);
 

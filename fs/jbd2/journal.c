@@ -794,22 +794,18 @@ int jbd2_journal_bmap(journal_t *journal, unsigned long blocknr,
 {
 	int err = 0;
 	unsigned long long ret;
-	sector_t block = 0;
 
 	if (journal->j_inode) {
-		block = blocknr;
-		ret = bmap(journal->j_inode, &block);
-
-		if (ret || !block) {
+		ret = bmap(journal->j_inode, blocknr);
+		if (ret)
+			*retp = ret;
+		else {
 			printk(KERN_ALERT "%s: journal block not found "
 					"at offset %lu on %s\n",
 			       __func__, blocknr, journal->j_devname);
 			err = -EIO;
 			jbd2_journal_abort(journal, err);
-		} else {
-			*retp = block;
 		}
-
 	} else {
 		*retp = blocknr; /* +journal->j_blk_offset */
 	}
@@ -1077,11 +1073,12 @@ static int jbd2_seq_info_release(struct inode *inode, struct file *file)
 	return seq_release(inode, file);
 }
 
-static const struct proc_ops jbd2_info_proc_ops = {
-	.proc_open	= jbd2_seq_info_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= jbd2_seq_info_release,
+static const struct file_operations jbd2_seq_info_fops = {
+	.owner		= THIS_MODULE,
+	.open           = jbd2_seq_info_open,
+	.read           = seq_read,
+	.llseek         = seq_lseek,
+	.release        = jbd2_seq_info_release,
 };
 
 static struct proc_dir_entry *proc_jbd2_stats;
@@ -1091,7 +1088,7 @@ static void jbd2_stats_proc_init(journal_t *journal)
 	journal->j_proc_entry = proc_mkdir(journal->j_devname, proc_jbd2_stats);
 	if (journal->j_proc_entry) {
 		proc_create_data("info", S_IRUGO, journal->j_proc_entry,
-				 &jbd2_info_proc_ops, journal);
+				 &jbd2_seq_info_fops, journal);
 	}
 }
 
@@ -1235,14 +1232,11 @@ journal_t *jbd2_journal_init_dev(struct block_device *bdev,
 journal_t *jbd2_journal_init_inode(struct inode *inode)
 {
 	journal_t *journal;
-	sector_t blocknr;
 	char *p;
-	int err = 0;
+	unsigned long long blocknr;
 
-	blocknr = 0;
-	err = bmap(inode, &blocknr);
-
-	if (err || !blocknr) {
+	blocknr = bmap(inode, 0);
+	if (!blocknr) {
 		pr_err("%s: Cannot locate journal superblock\n",
 			__func__);
 		return NULL;

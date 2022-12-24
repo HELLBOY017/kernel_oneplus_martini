@@ -392,31 +392,7 @@ unsigned long cpu_get_elf_hwcap2(void);
 #define cpu_set_named_feature(name) cpu_set_feature(cpu_feature(name))
 #define cpu_have_named_feature(name) cpu_have_feature(cpu_feature(name))
 
-static __always_inline bool system_capabilities_finalized(void)
-{
-	return static_branch_likely(&arm64_const_caps_ready);
-}
-
-/*
- * Test for a capability with a runtime check.
- *
- * Before the capability is detected, this returns false.
- */
-static inline bool cpus_have_cap(unsigned int num)
-{
-	if (num >= ARM64_NCAPS)
-		return false;
-	return test_bit(num, cpu_hwcaps);
-}
-
-/*
- * Test for a capability without a runtime check.
- *
- * Before capabilities are finalized, this returns false.
- * After capabilities are finalized, this is patched to avoid a runtime check.
- *
- * @num must be a compile-time constant.
- */
+/* System capability check for constant caps */
 static __always_inline bool __cpus_have_const_cap(int num)
 {
 	if (num >= ARM64_NCAPS)
@@ -424,33 +400,16 @@ static __always_inline bool __cpus_have_const_cap(int num)
 	return static_branch_unlikely(&cpu_hwcap_keys[num]);
 }
 
-/*
- * Test for a capability without a runtime check.
- *
- * Before capabilities are finalized, this will BUG().
- * After capabilities are finalized, this is patched to avoid a runtime check.
- *
- * @num must be a compile-time constant.
- */
-static __always_inline bool cpus_have_final_cap(int num)
+static inline bool cpus_have_cap(unsigned int num)
 {
-	if (system_capabilities_finalized())
-		return __cpus_have_const_cap(num);
-	else
-		BUG();
+	if (num >= ARM64_NCAPS)
+		return false;
+	return test_bit(num, cpu_hwcaps);
 }
 
-/*
- * Test for a capability, possibly with a runtime check.
- *
- * Before capabilities are finalized, this behaves as cpus_have_cap().
- * After capabilities are finalized, this is patched to avoid a runtime check.
- *
- * @num must be a compile-time constant.
- */
 static __always_inline bool cpus_have_const_cap(int num)
 {
-	if (system_capabilities_finalized())
+	if (static_branch_likely(&arm64_const_caps_ready))
 		return __cpus_have_const_cap(num);
 	else
 		return cpus_have_cap(num);
@@ -525,13 +484,6 @@ static inline bool id_aa64mmfr0_mixed_endian_el0(u64 mmfr0)
 		cpuid_feature_extract_unsigned_field(mmfr0, ID_AA64MMFR0_BIGENDEL0_SHIFT) == 0x1;
 }
 
-static inline bool id_aa64pfr0_32bit_el1(u64 pfr0)
-{
-	u32 val = cpuid_feature_extract_unsigned_field(pfr0, ID_AA64PFR0_EL1_SHIFT);
-
-	return val == ID_AA64PFR0_EL1_32BIT_64BIT;
-}
-
 static inline bool id_aa64pfr0_32bit_el0(u64 pfr0)
 {
 	u32 val = cpuid_feature_extract_unsigned_field(pfr0, ID_AA64PFR0_EL0_SHIFT);
@@ -584,15 +536,9 @@ static inline bool supports_clearbhb(int scope)
 						    ID_AA64ISAR2_CLEARBHB_SHIFT);
 }
 
-const struct cpumask *system_32bit_el0_cpumask(void);
-DECLARE_STATIC_KEY_FALSE(arm64_mismatched_32bit_el0);
-
 static inline bool system_supports_32bit_el0(void)
 {
-	u64 pfr0 = read_sanitised_ftr_reg(SYS_ID_AA64PFR0_EL1);
-
-	return static_branch_unlikely(&arm64_mismatched_32bit_el0) ||
-	       id_aa64pfr0_32bit_el0(pfr0);
+	return cpus_have_const_cap(ARM64_HAS_32BIT_EL0);
 }
 
 static inline bool system_supports_4kb_granule(void)
@@ -754,19 +700,6 @@ static inline u32 id_aa64mmfr0_parange_to_phys_shift(int parange)
 	 */
 	default: return CONFIG_ARM64_PA_BITS;
 	}
-}
-
-/* Check whether hardware update of the Access flag is supported */
-static inline bool cpu_has_hw_af(void)
-{
-	u64 mmfr1;
-
-	if (!IS_ENABLED(CONFIG_ARM64_HW_AFDBM))
-		return false;
-
-	mmfr1 = read_cpuid(ID_AA64MMFR1_EL1);
-	return cpuid_feature_extract_unsigned_field(mmfr1,
-						ID_AA64MMFR1_HADBS_SHIFT);
 }
 
 #ifdef CONFIG_ARM64_AMU_EXTN

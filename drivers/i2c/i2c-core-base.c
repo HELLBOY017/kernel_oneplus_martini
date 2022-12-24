@@ -883,13 +883,10 @@ static int dummy_remove(struct i2c_client *client)
 }
 
 static struct i2c_driver dummy_driver = {
+	.driver.name	= "dummy",
 	.probe		= dummy_probe,
 	.remove		= dummy_remove,
 	.id_table	= dummy_id,
-	.driver = {
-		.name = "dummy",
-		.probe_type = PROBE_FORCE_SYNCHRONOUS,
-	},
 };
 
 /**
@@ -2361,9 +2358,8 @@ void i2c_put_adapter(struct i2c_adapter *adap)
 	if (!adap)
 		return;
 
-	module_put(adap->owner);
-	/* Should be last, otherwise we risk use-after-free with 'adap' */
 	put_device(&adap->dev);
+	module_put(adap->owner);
 }
 EXPORT_SYMBOL(i2c_put_adapter);
 

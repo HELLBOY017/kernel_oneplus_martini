@@ -140,14 +140,13 @@ static void enter_s2idle_proper(struct cpuidle_driver *drv,
 	 * executing it contains RCU usage regarded as invalid in the idle
 	 * context, so tell RCU about that.
 	 */
-	tick_freeze();
+	RCU_NONIDLE(tick_freeze());
 	/*
 	 * The state used here cannot be a "coupled" one, because the "coupled"
 	 * cpuidle mechanism enables interrupts and doing that with timekeeping
 	 * suspended is generally unsafe.
 	 */
 	stop_critical_timings();
-	rcu_idle_enter();
 	drv->states[index].enter_s2idle(dev, drv, index);
 	if (WARN_ON_ONCE(!irqs_disabled()))
 		local_irq_disable();
@@ -156,8 +155,7 @@ static void enter_s2idle_proper(struct cpuidle_driver *drv,
 	 * first CPU executing it calls functions containing RCU read-side
 	 * critical sections, so tell RCU about that.
 	 */
-	rcu_idle_exit();
-	tick_unfreeze();
+	RCU_NONIDLE(tick_unfreeze());
 	start_critical_timings();
 
 	time_end = ns_to_ktime(local_clock());
@@ -223,23 +221,21 @@ int __nocfi cpuidle_enter_state(struct cpuidle_device *dev, struct cpuidle_drive
 	}
 
 	/* Take note of the planned idle state. */
-	sched_idle_set_state(target_state);
+	sched_idle_set_state(target_state, index);
 
-	trace_cpu_idle(index, dev->cpu);
+	trace_cpu_idle_rcuidle(index, dev->cpu);
 	time_start = ns_to_ktime(local_clock());
 
 	stop_critical_timings();
-	rcu_idle_enter();
 	entered_state = target_state->enter(dev, drv, index);
-	rcu_idle_exit();
 	start_critical_timings();
 
 	sched_clock_idle_wakeup_event();
 	time_end = ns_to_ktime(local_clock());
-	trace_cpu_idle(PWR_EVENT_EXIT, dev->cpu);
+	trace_cpu_idle_rcuidle(PWR_EVENT_EXIT, dev->cpu);
 
 	/* The cpu is no longer idle or about to enter idle. */
-	sched_idle_set_state(NULL);
+	sched_idle_set_state(NULL, -1);
 
 	if (broadcast) {
 		if (WARN_ON_ONCE(!irqs_disabled()))
@@ -419,7 +415,7 @@ void cpuidle_uninstall_idle_handler(void)
 {
 	if (enabled_devices) {
 		initialized = 0;
-		wake_up_all_online_idle_cpus();
+		wake_up_all_idle_cpus();
 	}
 
 	/*
@@ -735,15 +731,53 @@ int cpuidle_register(struct cpuidle_driver *drv,
 }
 EXPORT_SYMBOL_GPL(cpuidle_register);
 
+#ifdef CONFIG_SMP
+
+/*
+ * This function gets called when a part of the kernel has a new latency
+ * requirement.  This means we need to get all processors out of their C-state,
+ * and then recalculate a new suitable C-state. Just do a cross-cpu IPI; that
+ * wakes them all right up.
+ */
+static int cpuidle_latency_notify(struct notifier_block *b,
+		unsigned long l, void *v)
+{
+	wake_up_all_idle_cpus();
+	return NOTIFY_OK;
+}
+
+static struct notifier_block cpuidle_latency_notifier = {
+	.notifier_call = cpuidle_latency_notify,
+};
+
+static inline void latency_notifier_init(struct notifier_block *n)
+{
+	pm_qos_add_notifier(PM_QOS_CPU_DMA_LATENCY, n);
+}
+
+#else /* CONFIG_SMP */
+
+#define latency_notifier_init(x) do { } while (0)
+
+#endif /* CONFIG_SMP */
+
 /**
  * cpuidle_init - core initializer
  */
 static int __init cpuidle_init(void)
 {
+	int ret;
+
 	if (cpuidle_disabled())
 		return -ENODEV;
 
-	return cpuidle_add_interface(cpu_subsys.dev_root);
+	ret = cpuidle_add_interface(cpu_subsys.dev_root);
+	if (ret)
+		return ret;
+
+	latency_notifier_init(&cpuidle_latency_notifier);
+
+	return 0;
 }
 
 module_param(off, int, 0444);

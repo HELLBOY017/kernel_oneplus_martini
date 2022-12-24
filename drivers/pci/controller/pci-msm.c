@@ -74,7 +74,6 @@
 #define PCIE20_PARF_MHI_CLOCK_RESET_CTRL (0x174)
 #define PCIE20_PARF_AXI_MSTR_RD_ADDR_HALT (0x1a4)
 #define PCIE20_PARF_AXI_MSTR_WR_ADDR_HALT (0x1a8)
-#define PCIE20_PCIE_PARF_AXI_MSTR_WR_NS_BDF_HALT (0x4a0)
 #define PCIE20_PARF_LTSSM (0x1b0)
 #define PCIE20_PARF_INT_ALL_STATUS (0x224)
 #define PCIE20_PARF_INT_ALL_CLEAR (0x228)
@@ -848,7 +847,6 @@ struct msm_pcie_dev_t {
 	bool linkdown_panic;
 	uint32_t boot_option;
 	bool pcie_halt_feature_dis;
-	bool pcie_bdf_halt_dis;
 
 	uint32_t rc_idx;
 	uint32_t phy_ver;
@@ -1686,8 +1684,6 @@ static void msm_pcie_show_status(struct msm_pcie_dev_t *dev)
 		dev->slv_addr_space_size);
 	PCIE_DBG_FS(dev, "PCIe: halt_feature_dis is %d\n",
 		dev->pcie_halt_feature_dis);
-	PCIE_DBG_FS(dev, "PCIe: bdf_halt_dis is %d\n",
-		dev->pcie_bdf_halt_dis);
 	PCIE_DBG_FS(dev, "phy_status_offset: 0x%x\n",
 		dev->phy_status_offset);
 	PCIE_DBG_FS(dev, "phy_status_bit: %u\n",
@@ -4765,12 +4761,6 @@ static int msm_pcie_enable(struct msm_pcie_dev_t *dev)
 				BIT(31) | val);
 	}
 
-	if (dev->pcie_bdf_halt_dis) {
-		val = readl_relaxed(dev->parf + PCIE20_PCIE_PARF_AXI_MSTR_WR_NS_BDF_HALT);
-		msm_pcie_write_reg(dev->parf, PCIE20_PCIE_PARF_AXI_MSTR_WR_NS_BDF_HALT,
-				(~BIT(0)) & val);
-	}
-
 	/* init tcsr */
 	if (dev->tcsr_config)
 		pcie_tcsr_init(dev);
@@ -6322,11 +6312,6 @@ static int msm_pcie_probe(struct platform_device *pdev)
 	PCIE_DBG(pcie_dev, "PCIe halt feature is %s enabled.\n",
 			pcie_dev->pcie_halt_feature_dis ? "not" : "");
 
-	pcie_dev->pcie_bdf_halt_dis = of_property_read_bool(of_node,
-			"qcom,bdf-halt-dis");
-	PCIE_DBG(pcie_dev, "PCIe BDF halt feature is %s enabled.\n",
-			pcie_dev->pcie_bdf_halt_dis ? "not" : "");
-
 	of_property_read_u32(of_node, "qcom,phy-status-offset",
 				&pcie_dev->phy_status_offset);
 	PCIE_DBG(pcie_dev, "RC%d: phy-status-offset: 0x%x.\n", pcie_dev->rc_idx,
@@ -7760,7 +7745,7 @@ static int msm_pcie_drv_send_rpmsg(struct msm_pcie_dev_t *pcie_dev,
 				   struct msm_pcie_drv_msg *msg)
 {
 	struct msm_pcie_drv_info *drv_info = pcie_dev->drv_info;
-	int ret, re_try = 5; /* sleep 5 ms per re-try */
+	int ret;
 	struct rpmsg_device *rpdev;
 
 	mutex_lock(&pcie_drv.rpmsg_lock);
@@ -7781,15 +7766,8 @@ static int msm_pcie_drv_send_rpmsg(struct msm_pcie_dev_t *pcie_dev,
 	PCIE_DBG(pcie_dev, "PCIe: RC%d: DRV: sending rpmsg: command: 0x%x\n",
 		pcie_dev->rc_idx, msg->pkt.dword[0]);
 
-retry:
 	ret = rpmsg_trysend(rpdev->ept, msg, sizeof(*msg));
 	if (ret) {
-		if (ret == -EBUSY && re_try) {
-			usleep_range(5000, 5001);
-			re_try--;
-			goto retry;
-		}
-
 		PCIE_ERR(pcie_dev,
 			 "PCIe: RC%d: DRV: failed to send rpmsg, ret:%d\n",
 			pcie_dev->rc_idx, ret);

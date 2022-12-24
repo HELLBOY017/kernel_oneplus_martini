@@ -1002,7 +1002,7 @@ void uverbs_user_mmap_disassociate(struct ib_uverbs_file *ufile)
 		 * at a time to get the lock ordering right. Typically there
 		 * will only be one mm, so no big deal.
 		 */
-		mmap_read_lock(mm);
+		down_read(&mm->mmap_sem);
 		if (!mmget_still_valid(mm))
 			goto skip_mm;
 		mutex_lock(&ufile->umap_lock);
@@ -1019,7 +1019,7 @@ void uverbs_user_mmap_disassociate(struct ib_uverbs_file *ufile)
 		}
 		mutex_unlock(&ufile->umap_lock);
 	skip_mm:
-		mmap_read_unlock(mm);
+		up_read(&mm->mmap_sem);
 		mmput(mm);
 	}
 }
@@ -1137,7 +1137,7 @@ static const struct file_operations uverbs_fops = {
 	.release = ib_uverbs_close,
 	.llseek	 = no_llseek,
 	.unlocked_ioctl = ib_uverbs_ioctl,
-	.compat_ioctl = compat_ptr_ioctl,
+	.compat_ioctl = ib_uverbs_ioctl,
 };
 
 static const struct file_operations uverbs_mmap_fops = {
@@ -1148,7 +1148,7 @@ static const struct file_operations uverbs_mmap_fops = {
 	.release = ib_uverbs_close,
 	.llseek	 = no_llseek,
 	.unlocked_ioctl = ib_uverbs_ioctl,
-	.compat_ioctl = compat_ptr_ioctl,
+	.compat_ioctl = ib_uverbs_ioctl,
 };
 
 static int ib_uverbs_get_nl_info(struct ib_device *ibdev, void *client_data,

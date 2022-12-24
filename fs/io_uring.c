@@ -3169,7 +3169,6 @@ static int __io_sqe_files_scm(struct io_ring_ctx *ctx, int nr, int offset)
 	}
 
 	skb->sk = sk;
-	skb->scm_io_uring = 1;
 	skb->destructor = io_destruct_skb;
 
 	fpl->user = get_uid(ctx->user);
@@ -3579,7 +3578,7 @@ static int io_sqe_buffer_register(struct io_ring_ctx *ctx, void __user *arg,
 		}
 
 		ret = 0;
-		mmap_read_lock(current->mm);
+		down_read(&current->mm->mmap_sem);
 		pret = get_user_pages(ubuf, nr_pages,
 				      FOLL_WRITE | FOLL_LONGTERM,
 				      pages, vmas);
@@ -3597,7 +3596,7 @@ static int io_sqe_buffer_register(struct io_ring_ctx *ctx, void __user *arg,
 		} else {
 			ret = pret < 0 ? pret : -EFAULT;
 		}
-		mmap_read_unlock(current->mm);
+		up_read(&current->mm->mmap_sem);
 		if (ret) {
 			/*
 			 * if we did partial map, or found file backed vmas,

@@ -102,11 +102,13 @@ struct ipi_history {
 	ktime_t cpu_idle_resched_ts;
 };
 
+static DEFINE_PER_CPU(ktime_t, next_hrtimer);
 static DEFINE_PER_CPU(struct lpm_history, hist);
 static DEFINE_PER_CPU(struct ipi_history, cpu_ipi_history);
 static DEFINE_PER_CPU(struct lpm_cpu*, cpu_lpm);
 static bool suspend_in_progress;
 static DEFINE_PER_CPU(struct hrtimer, histtimer);
+static DEFINE_PER_CPU(struct hrtimer, biastimer);
 static struct lpm_debug *lpm_debug;
 static phys_addr_t lpm_debug_phys;
 static const int num_dbg_elements = 0x100;
@@ -130,6 +132,18 @@ static struct notifier_block dev_pm_qos_nb[MAX_LPM_CPUS] = {
 };
 #endif
 
+#ifdef CONFIG_SCHED_WALT
+static bool check_cpu_isolated(int cpu)
+{
+	return cpu_isolated(cpu);
+}
+#else
+static bool check_cpu_isolated(int cpu)
+{
+	return false;
+}
+#endif
+
 #ifdef CONFIG_SMP
 static int lpm_cpu_qos_notify(struct notifier_block *nb,
 		unsigned long val, void *ptr)
@@ -137,7 +151,8 @@ static int lpm_cpu_qos_notify(struct notifier_block *nb,
 	int cpu = nb - dev_pm_qos_nb;
 
 	preempt_disable();
-	if (cpu != smp_processor_id() && cpu_online(cpu))
+	if (cpu != smp_processor_id() && cpu_online(cpu) &&
+	    !check_cpu_isolated(cpu))
 		wake_up_if_idle(cpu);
 	preempt_enable();
 
@@ -251,10 +266,10 @@ static uint32_t get_next_event(struct lpm_cpu *cpu)
 		return 0;
 
 	for_each_cpu(next_cpu, &cpu_lpm_mask) {
-		ktime_t *next_event_c = get_next_event_cpu(next_cpu);
+		ktime_t next_event_c = per_cpu(next_hrtimer, next_cpu);
 
-		if (next_event > *next_event_c)
-			next_event = *next_event_c;
+		if (next_event > next_event_c)
+			next_event = next_event_c;
 	}
 
 	return ktime_to_us(ktime_sub(next_event, ktime_get()));
@@ -271,6 +286,8 @@ static void disable_rimps_timer(struct lpm_cpu *cpu)
 	ctrl_val = readl_relaxed(cpu->rimps_tmr_base + TIMER_CTRL);
 	writel_relaxed(ctrl_val & ~(TIMER_CONTROL_EN),
 				cpu->rimps_tmr_base + TIMER_CTRL);
+	/* Ensure the write is complete before returning. */
+	wmb();
 	spin_unlock(&cpu->cpu_lock);
 
 }
@@ -297,13 +314,15 @@ static void program_rimps_timer(struct lpm_cpu *cpu)
 	spin_lock(&cpu->cpu_lock);
 
 	/* RIMPS timer pending should be read before programming timeout val */
-	readl(cpu->rimps_tmr_base + TIMER_PENDING);
+	readl_relaxed(cpu->rimps_tmr_base + TIMER_PENDING);
 	ctrl_val = readl_relaxed(cpu->rimps_tmr_base + TIMER_CTRL);
 	writel_relaxed(ctrl_val & ~(TIMER_CONTROL_EN),
 				cpu->rimps_tmr_base + TIMER_CTRL);
 	writel_relaxed(next_event, cpu->rimps_tmr_base + TIMER_VAL);
 	writel_relaxed(ctrl_val | (TIMER_CONTROL_EN),
 				cpu->rimps_tmr_base + TIMER_CTRL);
+	/* Ensure the write is complete before returning. */
+	wmb();
 	spin_unlock(&cpu->cpu_lock);
 }
 
@@ -421,6 +440,34 @@ static void clusttimer_start(struct lpm_cluster *cluster, uint32_t time_us)
 	cluster->histtimer.function = clusttimer_fn;
 	hrtimer_start(&cluster->histtimer, clust_ktime,
 				HRTIMER_MODE_REL_PINNED);
+}
+
+static void biastimer_cancel(void)
+{
+	unsigned int cpu = raw_smp_processor_id();
+	struct hrtimer *cpu_biastimer = &per_cpu(biastimer, cpu);
+	ktime_t time_rem;
+
+	time_rem = hrtimer_get_remaining(cpu_biastimer);
+	if (ktime_to_us(time_rem) <= 0)
+		return;
+
+	hrtimer_try_to_cancel(cpu_biastimer);
+}
+
+static enum hrtimer_restart biastimer_fn(struct hrtimer *h)
+{
+	return HRTIMER_NORESTART;
+}
+
+static void biastimer_start(uint32_t time_ns)
+{
+	ktime_t bias_ktime = ns_to_ktime(time_ns);
+	unsigned int cpu = raw_smp_processor_id();
+	struct hrtimer *cpu_biastimer = &per_cpu(biastimer, cpu);
+
+	cpu_biastimer->function = biastimer_fn;
+	hrtimer_start(cpu_biastimer, bias_ktime, HRTIMER_MODE_REL_PINNED);
 }
 
 static uint64_t find_deviation(int *interval, uint32_t ref_stddev,
@@ -609,14 +656,23 @@ static void clear_predict_history(void)
 
 static void update_history(struct cpuidle_device *dev, int idx);
 
-static inline bool lpm_disallowed(s64 sleep_us, int cpu)
+static inline bool lpm_disallowed(s64 sleep_us, int cpu, struct lpm_cpu *pm_cpu)
 {
-	if (sleep_disabled)
+	uint64_t bias_time = 0;
+
+	if (check_cpu_isolated(cpu))
+		goto out;
+
+	if (sleep_disabled || sleep_us < 0)
 		return true;
 
-	if (sleep_us < 0)
+	bias_time = sched_lpm_disallowed_time(cpu);
+	if (bias_time) {
+		pm_cpu->bias = bias_time;
 		return true;
+	}
 
+out:
 	return false;
 }
 
@@ -624,9 +680,11 @@ static inline uint32_t get_cpus_qos(const struct cpumask *mask)
 {
 	int cpu;
 	uint32_t n;
-	uint32_t latency = PM_QOS_CPU_LATENCY_DEFAULT_VALUE;
+	uint32_t latency = PM_QOS_CPU_DMA_LAT_DEFAULT_VALUE;
 
 	for_each_cpu(cpu, mask) {
+		if (check_cpu_isolated(cpu))
+			continue;
 		n = cpuidle_governor_latency_req(cpu);
 		if (n < latency)
 			latency = n;
@@ -650,7 +708,7 @@ static int cpu_power_select(struct cpuidle_device *dev,
 	uint32_t min_residency, max_residency;
 	struct power_params *pwr_params;
 
-	if (lpm_disallowed(sleep_us, dev->cpu))
+	if (lpm_disallowed(sleep_us, dev->cpu, cpu))
 		goto done_select;
 
 	idx_restrict = cpu->nlevels + 1;
@@ -667,7 +725,7 @@ static int cpu_power_select(struct cpuidle_device *dev,
 		if (latency_us < lvl_latency_us)
 			break;
 
-		if (!i) {
+		if (!i && !check_cpu_isolated(dev->cpu)) {
 			/*
 			 * If the next_wake_us itself is not sufficient for
 			 * deeper low power modes than clock gating do not
@@ -718,7 +776,7 @@ static int cpu_power_select(struct cpuidle_device *dev,
 	}
 
 done_select:
-	trace_cpu_power_select(best_level, sleep_us, latency_us, 0);
+	trace_cpu_power_select(best_level, sleep_us, latency_us, cpu->bias);
 
 	trace_cpu_pred_select(idx_restrict_time ? 2 : (ipi_predicted ?
 				3 : (predicted ? 1 : 0)), predicted, htime);
@@ -736,10 +794,10 @@ static unsigned int get_next_online_cpu(bool from_idle)
 		return next_cpu;
 	next_event = KTIME_MAX;
 	for_each_online_cpu(cpu) {
-		ktime_t *next_event_c = get_next_event_cpu(cpu);
+		ktime_t next_event_c = per_cpu(next_hrtimer, cpu);
 
-		if (*next_event_c < next_event) {
-			next_event = *next_event_c;
+		if (next_event_c < next_event) {
+			next_event = next_event_c;
 			next_cpu = cpu;
 		}
 	}
@@ -763,10 +821,10 @@ static uint64_t get_cluster_sleep_time(struct lpm_cluster *cluster,
 			&cluster->num_children_in_sync, cpu_online_mask);
 
 	for_each_cpu(cpu, &online_cpus_in_cluster) {
-		ktime_t *next_event_c = get_next_event_cpu(cpu);
+		ktime_t next_event_c = per_cpu(next_hrtimer, cpu);
 
-		if (*next_event_c < next_event)
-			next_event = *next_event_c;
+		if (next_event_c < next_event)
+			next_event = next_event_c;
 
 		if (from_idle && lpm_prediction && cluster->lpm_prediction) {
 			history = &per_cpu(hist, cpu);
@@ -1059,12 +1117,8 @@ static int cluster_configure(struct lpm_cluster *cluster, int idx,
 		 * LPMs (XO and Vmin).
 		 */
 		if (!from_idle) {
-#ifdef CONFIG_COMMON_CLK_QCOM_DEBUG
 			clock_debug_print_enabled();
-#endif
-#ifdef CONFIG_REGULATOR_QTI_DEBUG
 			regulator_debug_print_enabled();
-#endif
 		}
 
 		cpu = get_next_online_cpu(from_idle);
@@ -1305,6 +1359,8 @@ static int psci_enter_sleep(struct lpm_cpu *cpu, int idx, bool from_idle)
 	 */
 
 	if (!idx) {
+		if (cpu->bias)
+			biastimer_start(cpu->bias);
 		stop_critical_timings();
 		cpu_do_idle();
 		start_critical_timings();
@@ -1411,6 +1467,9 @@ static int lpm_cpuidle_enter(struct cpuidle_device *dev,
 	uint64_t start_time = ktime_to_ns(start), end_time;
 	int ret = -EBUSY;
 
+	/* Read the timer from the CPU that is entering idle */
+	per_cpu(next_hrtimer, dev->cpu) = tick_nohz_get_next_hrtimer();
+
 	cpu_prepare(cpu, idx, true);
 	cluster_prepare(cpu->parent, cpumask, idx, true, start_time);
 
@@ -1440,6 +1499,10 @@ exit:
 	if (lpm_prediction && cpu->lpm_prediction) {
 		histtimer_cancel();
 		clusttimer_cancel();
+	}
+	if (cpu->bias) {
+		biastimer_cancel();
+		cpu->bias = 0;
 	}
 	local_irq_enable();
 	return idx;
@@ -1733,6 +1796,8 @@ static int lpm_probe(struct platform_device *pdev)
 	 */
 	for_each_possible_cpu(cpu) {
 		cpu_histtimer = &per_cpu(histtimer, cpu);
+		hrtimer_init(cpu_histtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+		cpu_histtimer = &per_cpu(biastimer, cpu);
 		hrtimer_init(cpu_histtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	}
 

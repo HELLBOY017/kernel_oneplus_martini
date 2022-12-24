@@ -149,6 +149,7 @@ void secondary_start_kernel(void)
 	cpumask_set_cpu(cpu, mm_cpumask(mm));
 	enter_lazy_tlb(mm, current);
 
+	preempt_disable();
 	trace_hardirqs_off();
 
 	calibrate_delay();

@@ -74,6 +74,12 @@ struct task_struct init_task
 	.cpus_ptr	= &init_task.cpus_mask,
 	.cpus_mask	= CPU_MASK_ALL,
 	.nr_cpus_allowed= NR_CPUS,
+#ifdef CONFIG_SCHED_WALT
+	.wts		= {
+		.cpus_requested	= CPU_MASK_ALL,
+		.wake_up_idle	= false,
+	},
+#endif
 	.mm		= NULL,
 	.active_mm	= &init_mm,
 	.restart_block	= {
@@ -142,8 +148,7 @@ struct task_struct init_task
 	.rcu_tasks_idle_cpu = -1,
 #endif
 #ifdef CONFIG_CPUSETS
-	.mems_allowed_seq = SEQCNT_SPINLOCK_ZERO(init_task.mems_allowed_seq,
-						 &init_task.alloc_lock),
+	.mems_allowed_seq = SEQCNT_ZERO(init_task.mems_allowed_seq),
 #endif
 #ifdef CONFIG_RT_MUTEXES
 	.pi_waiters	= RB_ROOT_CACHED,
@@ -184,7 +189,6 @@ struct task_struct init_task
 #ifdef CONFIG_SECURITY
 	.security	= NULL,
 #endif
-	.android_vendor_data1 = {0, },
 };
 EXPORT_SYMBOL(init_task);
 

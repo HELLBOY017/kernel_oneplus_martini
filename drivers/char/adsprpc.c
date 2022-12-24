@@ -1925,7 +1925,6 @@ static int context_build_overlap(struct smq_invoke_ctx *ctx)
 	sort(ctx->overps, nbufs, sizeof(*ctx->overps), overlap_ptr_cmp, NULL);
 	max.start = 0;
 	max.end = 0;
-	max.raix = 0;
 	for (i = 0; i < nbufs; ++i) {
 		if (ctx->overps[i]->start < max.end) {
 			ctx->overps[i]->mstart = max.end;
@@ -2617,15 +2616,15 @@ static int get_args(uint32_t kernel, struct smq_invoke_ctx *ctx)
 			if (map->attr & FASTRPC_ATTR_NOVA) {
 				offset = 0;
 			} else {
-				mmap_read_lock(current->mm);
+				down_read(&current->mm->mmap_sem);
 				VERIFY(err, NULL != (vma = find_vma(current->mm,
 								map->va)));
 				if (err) {
-					mmap_read_unlock(current->mm);
+					up_read(&current->mm->mmap_sem);
 					goto bail;
 				}
 				offset = buf_page_start(buf) - vma->vm_start;
-				mmap_read_unlock(current->mm);
+				up_read(&current->mm->mmap_sem);
 				VERIFY(err, offset + len <= (uintptr_t)map->size);
 				if (err) {
 					ADSPRPC_ERR(
@@ -2743,11 +2742,11 @@ static int get_args(uint32_t kernel, struct smq_invoke_ctx *ctx)
 					uint64_t flush_len;
 					struct vm_area_struct *vma;
 
-					mmap_read_lock(current->mm);
+					down_read(&current->mm->mmap_sem);
 					VERIFY(err, NULL != (vma = find_vma(
 						current->mm, rpra[i].buf.pv)));
 					if (err) {
-						mmap_read_unlock(current->mm);
+						up_read(&current->mm->mmap_sem);
 						goto bail;
 					}
 					if (ctx->overps[oix]->do_cmo) {
@@ -2762,7 +2761,7 @@ static int get_args(uint32_t kernel, struct smq_invoke_ctx *ctx)
 						ctx->overps[oix]->mend -
 						ctx->overps[oix]->mstart;
 					}
-					mmap_read_unlock(current->mm);
+					up_read(&current->mm->mmap_sem);
 					dma_buf_begin_cpu_access_partial(
 						map->buf, DMA_TO_DEVICE, offset,
 						flush_len);
@@ -2910,12 +2909,12 @@ static void inv_args(struct smq_invoke_ctx *ctx)
 					uint64_t inv_len;
 					struct vm_area_struct *vma;
 
-					mmap_read_lock(current->mm);
+					down_read(&current->mm->mmap_sem);
 					VERIFY(err, NULL != (vma = find_vma(
 						current->mm,
 						rpra[over].buf.pv)));
 					if (err) {
-						mmap_read_unlock(current->mm);
+						up_read(&current->mm->mmap_sem);
 						goto bail;
 					}
 					if (ctx->overps[i]->do_cmo) {
@@ -2930,7 +2929,7 @@ static void inv_args(struct smq_invoke_ctx *ctx)
 							ctx->overps[i]->mend -
 							ctx->overps[i]->mstart;
 					}
-					mmap_read_unlock(current->mm);
+					up_read(&current->mm->mmap_sem);
 					dma_buf_begin_cpu_access_partial(
 						map->buf, DMA_TO_DEVICE, offset,
 						inv_len);
@@ -7005,7 +7004,6 @@ static struct platform_driver fastrpc_driver = {
 		.name = "fastrpc",
 		.of_match_table = fastrpc_match_table,
 		.suppress_bind_attrs = true,
-		.probe_type = PROBE_FORCE_SYNCHRONOUS,
 	},
 };
 

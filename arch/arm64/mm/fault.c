@@ -36,8 +36,7 @@
 #include <asm/daifflags.h>
 #include <asm/debug-monitors.h>
 #include <asm/esr.h>
-#include <asm/kprobes.h>
-#include <asm/processor.h>
+#include <asm/kasan.h>
 #include <asm/sysreg.h>
 #include <asm/system_misc.h>
 #include <asm/pgtable.h>
@@ -104,6 +103,18 @@ static void mem_abort_decode(unsigned int esr)
 
 	if (esr_is_data_abort(esr))
 		data_abort_decode(esr);
+}
+
+static inline bool is_ttbr0_addr(unsigned long addr)
+{
+	/* entry assembly clears tags for TTBR0 addrs */
+	return addr < TASK_SIZE;
+}
+
+static inline bool is_ttbr1_addr(unsigned long addr)
+{
+	/* TTBR1 addresses may have a tag if KASAN_SW_TAGS is in use */
+	return arch_kasan_reset_tag(addr) >= PAGE_OFFSET;
 }
 
 static inline unsigned long mm_to_pgd_phys(struct mm_struct *mm)
@@ -501,11 +512,11 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 	 * validly references user space from well defined areas of the code,
 	 * we can bug out early if this is from code which shouldn't.
 	 */
-	if (!mmap_read_trylock(mm)) {
+	if (!down_read_trylock(&mm->mmap_sem)) {
 		if (!user_mode(regs) && !search_exception_tables(regs->pc))
 			goto no_context;
 retry:
-		mmap_read_lock(mm);
+		down_read(&mm->mmap_sem);
 	} else {
 		/*
 		 * The above down_read_trylock() might have succeeded in which
@@ -514,7 +525,7 @@ retry:
 		might_sleep();
 #ifdef CONFIG_DEBUG_VM
 		if (!user_mode(regs) && !search_exception_tables(regs->pc)) {
-			mmap_read_unlock(mm);
+			up_read(&mm->mmap_sem);
 			goto no_context;
 		}
 #endif
@@ -556,7 +567,7 @@ retry:
 			goto retry;
 		}
 	}
-	mmap_read_unlock(mm);
+	up_read(&mm->mmap_sem);
 
 done:
 
@@ -764,7 +775,8 @@ static const struct fault_info fault_info[] = {
 	{ do_bad,		SIGKILL, SI_KERNEL,	"unknown 63"			},
 };
 
-void do_mem_abort(unsigned long addr, unsigned int esr, struct pt_regs *regs)
+asmlinkage void __exception do_mem_abort(unsigned long addr, unsigned int esr,
+					 struct pt_regs *regs)
 {
 	const struct fault_info *inf = esr_to_fault_info(esr);
 
@@ -780,21 +792,43 @@ void do_mem_abort(unsigned long addr, unsigned int esr, struct pt_regs *regs)
 	arm64_notify_die(inf->name, regs,
 			 inf->sig, inf->code, (void __user *)addr, esr);
 }
-NOKPROBE_SYMBOL(do_mem_abort);
 
-void do_el0_irq_bp_hardening(void)
+asmlinkage void __exception do_el0_irq_bp_hardening(void)
 {
 	/* PC has already been checked in entry.S */
 	arm64_apply_bp_hardening();
 }
-NOKPROBE_SYMBOL(do_el0_irq_bp_hardening);
 
-void do_sp_pc_abort(unsigned long addr, unsigned int esr, struct pt_regs *regs)
+asmlinkage void __exception do_el0_ia_bp_hardening(unsigned long addr,
+						   unsigned int esr,
+						   struct pt_regs *regs)
 {
+	/*
+	 * We've taken an instruction abort from userspace and not yet
+	 * re-enabled IRQs. If the address is a kernel address, apply
+	 * BP hardening prior to enabling IRQs and pre-emption.
+	 */
+	if (!is_ttbr0_addr(addr))
+		arm64_apply_bp_hardening();
+
+	local_daif_restore(DAIF_PROCCTX);
+	do_mem_abort(addr, esr, regs);
+}
+
+
+asmlinkage void __exception do_sp_pc_abort(unsigned long addr,
+					   unsigned int esr,
+					   struct pt_regs *regs)
+{
+	if (user_mode(regs)) {
+		if (!is_ttbr0_addr(instruction_pointer(regs)))
+			arm64_apply_bp_hardening();
+		local_daif_restore(DAIF_PROCCTX);
+	}
+
 	arm64_notify_die("SP/PC alignment exception", regs,
 			 SIGBUS, BUS_ADRALN, (void __user *)addr, esr);
 }
-NOKPROBE_SYMBOL(do_sp_pc_abort);
 
 int __init early_brk64(unsigned long addr, unsigned int esr,
 		       struct pt_regs *regs);
@@ -877,7 +911,8 @@ NOKPROBE_SYMBOL(debug_exception_exit);
 #ifdef CONFIG_ARM64_ERRATUM_1463225
 DECLARE_PER_CPU(int, __in_cortex_a76_erratum_1463225_wa);
 
-static int cortex_a76_erratum_1463225_debug_handler(struct pt_regs *regs)
+static int __exception
+cortex_a76_erratum_1463225_debug_handler(struct pt_regs *regs)
 {
 	if (user_mode(regs))
 		return 0;
@@ -896,15 +931,16 @@ static int cortex_a76_erratum_1463225_debug_handler(struct pt_regs *regs)
 	return 1;
 }
 #else
-static int cortex_a76_erratum_1463225_debug_handler(struct pt_regs *regs)
+static int __exception
+cortex_a76_erratum_1463225_debug_handler(struct pt_regs *regs)
 {
 	return 0;
 }
 #endif /* CONFIG_ARM64_ERRATUM_1463225 */
-NOKPROBE_SYMBOL(cortex_a76_erratum_1463225_debug_handler);
 
-void do_debug_exception(unsigned long addr_if_watchpoint, unsigned int esr,
-			struct pt_regs *regs)
+asmlinkage void __exception do_debug_exception(unsigned long addr_if_watchpoint,
+					       unsigned int esr,
+					       struct pt_regs *regs)
 {
 	const struct fault_info *inf = esr_to_debug_fault_info(esr);
 	unsigned long pc = instruction_pointer(regs);

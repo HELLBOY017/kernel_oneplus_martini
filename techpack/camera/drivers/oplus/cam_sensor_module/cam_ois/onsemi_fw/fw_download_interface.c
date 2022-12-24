@@ -263,13 +263,15 @@ static ssize_t ois_write_tele(struct file *p_file,
 
 
 
-static const struct proc_ops proc_file_fops = {
-	.proc_read  = ois_read,
-	.proc_write = ois_write,
+static const struct file_operations proc_file_fops = {
+	.owner = THIS_MODULE,
+	.read  = ois_read,
+	.write = ois_write,
 };
-static const struct proc_ops proc_file_fops_tele = {
-	.proc_read  = ois_read_tele,
-	.proc_write = ois_write_tele,
+static const struct file_operations proc_file_fops_tele = {
+	.owner = THIS_MODULE,
+	.read  = ois_read_tele,
+	.write = ois_write_tele,
 };
 
 int ois_start_read(void *arg, bool start)
@@ -1159,7 +1161,7 @@ int OISPollThread128(void *arg)
 	uint64_t estimate_QTimer = 0;	// This is the QTimer interval between two sample
 	uint32_t vaild_cnt = 0;
 	uint32_t is_add_Offset = 0;
-	uint32_t offset_cnt = 0;
+	uint32_t offset_cnt;
         uint32_t data=0;
 
 	p_hall_data_in_ois = kzalloc(fifo_size_in_ois, GFP_KERNEL);

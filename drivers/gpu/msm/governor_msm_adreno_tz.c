@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2010-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2010-2020, The Linux Foundation. All rights reserved.
  */
 #include <linux/errno.h>
+#include <linux/module.h>
 #include <linux/devfreq.h>
 #include <linux/dma-mapping.h>
 #include <linux/math64.h>
+#include <linux/of_platform.h>
 #include <linux/spinlock.h>
 #include <linux/slab.h>
 #include <linux/io.h>
@@ -13,15 +15,14 @@
 #include <linux/mm.h>
 #include <linux/qcom_scm.h>
 #include <asm/cacheflush.h>
-#ifdef CONFIG_QGKI
-#include <drm/drm_refresh_rate.h>
-#endif
 #include <linux/qtee_shmbridge.h>
 
 #include "../../devfreq/governor.h"
 #include "msm_adreno_devfreq.h"
 
 static DEFINE_SPINLOCK(tz_lock);
+static DEFINE_SPINLOCK(sample_lock);
+static DEFINE_SPINLOCK(suspend_lock);
 /*
  * FLOOR is 5msec to capture up to 3 re-draws
  * per frame for 60fps content.
@@ -53,9 +54,9 @@ static DEFINE_SPINLOCK(tz_lock);
 
 #define TAG "msm_adreno_tz: "
 
-static atomic_long_t suspend_time;
-static atomic_long_t suspend_start;
-static atomic_long_t acc_total, acc_relative_busy;
+static u64 suspend_time;
+static u64 suspend_start;
+static unsigned long acc_total, acc_relative_busy;
 
 static struct msm_adreno_extended_profile *partner_gpu_profile;
 static void do_partner_start_event(struct work_struct *work);
@@ -68,18 +69,18 @@ static struct workqueue_struct *workqueue;
 /*
  * Returns GPU suspend time in millisecond.
  */
-static s64 suspend_time_ms(void)
+u64 suspend_time_ms(void)
 {
-	s64 suspend_sampling_time;
-	s64 time_diff;
+	u64 suspend_sampling_time;
+	u64 time_diff = 0;
 
-	if (!atomic_long_read(&suspend_start))
+	if (suspend_start == 0)
 		return 0;
 
-	suspend_sampling_time = ktime_to_ms(ktime_get());
-	time_diff = suspend_sampling_time - atomic_long_read(&suspend_start);
+	suspend_sampling_time = (u64)ktime_to_ms(ktime_get());
+	time_diff = suspend_sampling_time - suspend_start;
 	/* Update the suspend_start sample again */
-	atomic_long_set(&suspend_start, suspend_sampling_time);
+	suspend_start = suspend_sampling_time;
 	return time_diff;
 }
 
@@ -93,13 +94,14 @@ static ssize_t gpu_load_show(struct device *dev,
 	 * This will keep the average value in sync with
 	 * with the client sampling duration.
 	 */
-	if (atomic_long_read(&acc_total))
-		sysfs_busy_perc = (atomic_long_read(&acc_relative_busy) * 100) /
-				   atomic_long_read(&acc_total);
+	spin_lock(&sample_lock);
+	if (acc_total)
+		sysfs_busy_perc = (acc_relative_busy * 100) / acc_total;
 
 	/* Reset the parameters */
-	atomic_long_set(&acc_total, 0);
-	atomic_long_set(&acc_relative_busy, 0);
+	acc_total = 0;
+	acc_relative_busy = 0;
+	spin_unlock(&sample_lock);
 	return snprintf(buf, PAGE_SIZE, "%lu\n", sysfs_busy_perc);
 }
 
@@ -111,8 +113,9 @@ static ssize_t suspend_time_show(struct device *dev,
 	struct device_attribute *attr,
 	char *buf)
 {
-	s64 time_diff;
+	u64 time_diff = 0;
 
+	spin_lock(&suspend_lock);
 	time_diff = suspend_time_ms();
 	/*
 	 * Adding the previous suspend time also as the gpu
@@ -120,8 +123,9 @@ static ssize_t suspend_time_show(struct device *dev,
 	 * reads also and we should have the total suspend
 	 * since last read.
 	 */
-	time_diff += atomic_long_read(&suspend_time);
-	atomic_long_set(&suspend_time, 0);
+	time_diff += suspend_time;
+	suspend_time = 0;
+	spin_unlock(&suspend_lock);
 
 	return snprintf(buf, PAGE_SIZE, "%llu\n", time_diff);
 }
@@ -165,21 +169,24 @@ static const struct device_attribute *adreno_tz_attr_list[] = {
 		NULL
 };
 
-static void compute_work_load(struct devfreq_dev_status *stats,
+void compute_work_load(struct devfreq_dev_status *stats,
 		struct devfreq_msm_adreno_tz_data *priv,
 		struct devfreq *devfreq)
 {
-	s64 busy;
+	u64 busy;
 
+	spin_lock(&sample_lock);
 	/*
 	 * Keep collecting the stats till the client
 	 * reads it. Average of all samples and reset
 	 * is done when the entry is read
 	 */
-	atomic_long_add(stats->total_time, &acc_total);
-	busy = stats->busy_time * stats->current_frequency;
+	acc_total += stats->total_time;
+	busy = (u64)stats->busy_time * stats->current_frequency;
 	do_div(busy, devfreq->profile->freq_table[0]);
-	atomic_long_add(busy, &acc_relative_busy);
+	acc_relative_busy += busy;
+
+	spin_unlock(&sample_lock);
 }
 
 /* Trap into the TrustZone, and call funcs there. */
@@ -401,13 +408,6 @@ static int tz_get_target_freq(struct devfreq *devfreq, unsigned long *freq)
 			priv->bin.busy_time > CEILING) {
 		val = -1 * level;
 	} else {
-#ifdef CONFIG_QGKI
-		unsigned int refresh_rate = dsi_panel_get_refresh_rate();
-
-		if (refresh_rate > 60)
-			priv->bin.busy_time = priv->bin.busy_time * refresh_rate / 60;
-#endif
-
 		val = __secure_tz_update_entry3(level, priv->bin.total_time,
 			priv->bin.busy_time, context_count, priv);
 	}
@@ -544,11 +544,15 @@ static int tz_suspend(struct devfreq *devfreq)
 static int tz_handler(struct devfreq *devfreq, unsigned int event, void *data)
 {
 	int result;
+	struct msm_adreno_extended_profile *gpu_profile;
+	struct device_node *node = devfreq->dev.parent->of_node;
 
-	struct msm_adreno_extended_profile *gpu_profile = container_of(
-					(devfreq->profile),
-					struct msm_adreno_extended_profile,
-					profile);
+	if (!of_device_is_compatible(node, "qcom,kgsl-3d0"))
+		return -EINVAL;
+
+	gpu_profile = container_of((devfreq->profile),
+			struct msm_adreno_extended_profile,
+			profile);
 
 	switch (event) {
 	case DEVFREQ_GOV_START:
@@ -560,22 +564,28 @@ static int tz_handler(struct devfreq *devfreq, unsigned int event, void *data)
 		if (partner_gpu_profile && partner_gpu_profile->bus_devfreq)
 			queue_work(workqueue,
 				&gpu_profile->partner_stop_event_ws);
-		atomic_long_set(&suspend_start, 0);
+		spin_lock(&suspend_lock);
+		suspend_start = 0;
+		spin_unlock(&suspend_lock);
 		result = tz_stop(devfreq);
 		break;
 
 	case DEVFREQ_GOV_SUSPEND:
 		result = tz_suspend(devfreq);
 		if (!result) {
+			spin_lock(&suspend_lock);
 			/* Collect the start sample for suspend time */
-			atomic_long_set(&suspend_start, ktime_to_ms(ktime_get()));
+			suspend_start = (u64)ktime_to_ms(ktime_get());
+			spin_unlock(&suspend_lock);
 		}
 		break;
 
 	case DEVFREQ_GOV_RESUME:
-		atomic_long_add(suspend_time_ms(), &suspend_time);
+		spin_lock(&suspend_lock);
+		suspend_time += suspend_time_ms();
 		/* Reset the suspend_start when gpu resumes */
-		atomic_long_set(&suspend_start, 0);
+		suspend_start = 0;
+		spin_unlock(&suspend_lock);
 		/* fallthrough */
 	case DEVFREQ_GOV_INTERVAL:
 		/* fallthrough, this governor doesn't use polling */
@@ -645,7 +655,7 @@ static struct devfreq_governor msm_adreno_tz = {
 	.event_handler = tz_handler,
 };
 
-int msm_adreno_tz_init(void)
+static int __init msm_adreno_tz_init(void)
 {
 	workqueue = create_freezable_workqueue("governor_msm_adreno_tz_wq");
 
@@ -654,8 +664,9 @@ int msm_adreno_tz_init(void)
 
 	return devfreq_add_governor(&msm_adreno_tz);
 }
+subsys_initcall(msm_adreno_tz_init);
 
-void msm_adreno_tz_exit(void)
+static void __exit msm_adreno_tz_exit(void)
 {
 	int ret = devfreq_remove_governor(&msm_adreno_tz);
 
@@ -665,3 +676,7 @@ void msm_adreno_tz_exit(void)
 	if (workqueue != NULL)
 		destroy_workqueue(workqueue);
 }
+
+module_exit(msm_adreno_tz_exit);
+
+MODULE_LICENSE("GPL v2");

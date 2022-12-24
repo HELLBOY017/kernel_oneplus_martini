@@ -446,12 +446,12 @@ static int coredump_wait(int exit_code, struct core_state *core_state)
 	core_state->dumper.task = tsk;
 	core_state->dumper.next = NULL;
 
-	if (mmap_write_lock_killable(mm))
+	if (down_write_killable(&mm->mmap_sem))
 		return -EINTR;
 
 	if (!mm->core_state)
 		core_waiters = zap_threads(tsk, mm, core_state, exit_code);
-	mmap_write_unlock(mm);
+	up_write(&mm->mmap_sem);
 
 	if (core_waiters > 0) {
 		struct core_thread *ptr;

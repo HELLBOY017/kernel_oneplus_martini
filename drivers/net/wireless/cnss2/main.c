@@ -289,7 +289,8 @@ void cnss_request_pm_qos(struct device *dev, u32 qos_val)
 	if (!plat_priv)
 		return;
 
-	cpu_latency_qos_add_request(&plat_priv->qos_request, qos_val);
+	pm_qos_add_request(&plat_priv->qos_request, PM_QOS_CPU_DMA_LATENCY,
+			   qos_val);
 }
 EXPORT_SYMBOL(cnss_request_pm_qos);
 
@@ -300,7 +301,7 @@ void cnss_remove_pm_qos(struct device *dev)
 	if (!plat_priv)
 		return;
 
-	cpu_latency_qos_remove_request(&plat_priv->qos_request);
+	pm_qos_remove_request(&plat_priv->qos_request);
 }
 EXPORT_SYMBOL(cnss_remove_pm_qos);
 
@@ -3184,7 +3185,8 @@ struct driver_attribute fw_ready_attr = {
 static inline bool
 cnss_use_nv_mac(struct cnss_plat_data *plat_priv)
 {
-	return true;
+	return of_property_read_bool(plat_priv->plat_dev->dev.of_node,
+				     "use-nv-mac");
 }
 
 static inline bool

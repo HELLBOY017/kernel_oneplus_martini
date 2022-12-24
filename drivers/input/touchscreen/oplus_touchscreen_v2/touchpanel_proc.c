@@ -87,11 +87,20 @@ static ssize_t proc_optimized_time_read(struct file *file,
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_optimized_time_fops = {
 	.proc_write = proc_optimized_time_write,
 	.proc_read  = proc_optimized_time_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations proc_optimized_time_fops = {
+	.write = proc_optimized_time_write,
+	.read  = proc_optimized_time_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 /*/proc/touchpanel/kernel_grip_default_para*/
 static int tp_grip_default_para_read(struct seq_file *s, void *v)
@@ -163,11 +172,20 @@ static int tp_grip_default_para_open(struct inode *inode, struct file *file)
 	return single_open(file, tp_grip_default_para_read, PDE_DATA(inode));
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops tp_grip_default_para_fops = {
 	.proc_open  = tp_grip_default_para_open,
 	.proc_read  = seq_read,
 	.proc_release = single_release,
 };
+#else
+static const struct file_operations tp_grip_default_para_fops = {
+	.owner = THIS_MODULE,
+	.open  = tp_grip_default_para_open,
+	.read  = seq_read,
+	.release = single_release,
+};
+#endif
 
 /*tp_index - For read current tp index
  * Output:
@@ -207,11 +225,20 @@ static ssize_t proc_index_control_write(struct file *file,
 	return count;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_tp_index_ops = {
 	.proc_write = proc_index_control_write,
 	.proc_read  = proc_index_control_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations proc_tp_index_ops = {
+	.write = proc_index_control_write,
+	.read  = proc_index_control_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 /*debug_level - For touch panel driver debug_level
  * Output:
@@ -278,11 +305,20 @@ static ssize_t proc_debug_level_write(struct file *file,
 	return count;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_debug_level_ops = {
 	.proc_write = proc_debug_level_write,
 	.proc_read  = proc_debug_level_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations proc_debug_level_ops = {
+	.write = proc_debug_level_write,
+	.read  = proc_debug_level_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 /*double_tap_enable - For black screen gesture
  * Input:
@@ -349,11 +385,20 @@ static ssize_t proc_gesture_control_read(struct file *file, char __user *buffer,
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_gesture_control_fops = {
 	.proc_write = proc_gesture_control_write,
 	.proc_read  = proc_gesture_control_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations proc_gesture_control_fops = {
+	.write = proc_gesture_control_write,
+	.read  = proc_gesture_control_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 /*
  *    each bit cant enable or disable each gesture
@@ -385,8 +430,9 @@ static ssize_t proc_gesture_control_indep_write(struct file *file,
 
 	mutex_lock(&ts->mutex);
 
+	ts->gesture_enable_indep = value;
+
 	if (ts->ts_ops->set_gesture_state) {
-		ts->gesture_enable_indep = value;
 		ts->ts_ops->set_gesture_state(ts->chip_data, value);
 	}
 
@@ -415,11 +461,20 @@ static ssize_t proc_gesture_control_indep_read(struct file *file,
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_gesture_control_indep_fops = {
 	.proc_write = proc_gesture_control_indep_write,
 	.proc_read  = proc_gesture_control_indep_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations proc_gesture_control_indep_fops = {
+	.write = proc_gesture_control_indep_write,
+	.read  = proc_gesture_control_indep_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 
 /*coordinate - For black screen gesture coordinate*/
@@ -450,10 +505,18 @@ static ssize_t proc_coordinate_read(struct file *file, char __user *buffer,
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_coordinate_fops = {
 	.proc_read  = proc_coordinate_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations proc_coordinate_fops = {
+	.read  = proc_coordinate_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 #define HIGH_FRAME_RATE "high_frame_rate"
 /*game_switch_enable
@@ -550,11 +613,20 @@ static ssize_t proc_game_switch_read(struct file *file, char __user *buffer,
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_game_switch_fops = {
 	.proc_write = proc_game_switch_write,
 	.proc_read  = proc_game_switch_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations proc_game_switch_fops = {
+	.write = proc_game_switch_write,
+	.read  = proc_game_switch_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 /*irq_depth - For enable or disable irq
  * Output:
@@ -613,11 +685,20 @@ static ssize_t proc_irq_status_write(struct file *file,
 	return count;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_get_irq_depth_fops = {
 	.proc_open  = simple_open,
 	.proc_read  = proc_get_irq_depth_read,
 	.proc_write = proc_irq_status_write,
 };
+#else
+static const struct file_operations proc_get_irq_depth_fops = {
+	.owner = THIS_MODULE,
+	.open  = simple_open,
+	.read  = proc_get_irq_depth_read,
+	.write = proc_irq_status_write,
+};
+#endif
 
 static ssize_t proc_noise_modetest_read(struct file *file, char __user *buffer,
 					size_t count, loff_t *ppos)
@@ -665,11 +746,20 @@ static ssize_t proc_noise_modetest_write(struct file *file,
 	return count;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_noise_modetest_fops = {
 	.proc_read  = proc_noise_modetest_read,
 	.proc_write = proc_noise_modetest_write,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations proc_noise_modetest_fops = {
+	.read  = proc_noise_modetest_read,
+	.write = proc_noise_modetest_write,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 /*tp_fw_update - For touch panel fw update
  * Input:
@@ -724,22 +814,37 @@ static ssize_t proc_fw_update_write(struct file *file,
 		TP_INFO(ts->tp_index, "kill signal interrupt\n");
 
 #ifdef CONFIG_TOUCHIRQ_UPDATE_QOS
+
 	if (!ts->pm_qos_state) {
 		ts->pm_qos_value = PM_QOS_DEFAULT_VALUE;
-		cpu_latency_qos_add_request(&ts->pm_qos_req, ts->pm_qos_value);
-		ts->pm_qos_state = 1;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
+		dev_pm_qos_add_request(ts->dev, &ts->pm_qos_req, DEV_PM_QOS_RESUME_LATENCY,
+				       ts->pm_qos_value);
+#else
+		pm_qos_add_request(&ts->pm_qos_req, PM_QOS_CPU_DMA_LATENCY, ts->pm_qos_value);
+#endif
 		TP_INFO(ts->tp_index, "add qos request in touch driver.\n");
+		ts->pm_qos_state = 1;
 	}
+
 #endif
 
 	TP_INFO(ts->tp_index, "fw update finished\n");
 	return count;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_fw_update_ops = {
 	.proc_write = proc_fw_update_write,
 	.proc_open = simple_open,
 };
+#else
+static const struct file_operations proc_fw_update_ops = {
+	.write = proc_fw_update_write,
+	.open = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 /*oplus_register_info - For i2c debug way
  * Output:
@@ -818,11 +923,20 @@ static ssize_t proc_register_info_write(struct file *file,
 	return count;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_register_info_fops = {
 	.proc_open  = simple_open,
 	.proc_read  = proc_register_info_read,
 	.proc_write = proc_register_info_write,
 };
+#else
+static const struct file_operations proc_register_info_fops = {
+	.owner = THIS_MODULE,
+	.open  = simple_open,
+	.read  = proc_register_info_read,
+	.write = proc_register_info_write,
+};
+#endif
 
 static ssize_t proc_incell_panel_info_read(struct file *file,
 		char __user *buffer, size_t count, loff_t *ppos)
@@ -837,10 +951,18 @@ static ssize_t proc_incell_panel_info_read(struct file *file,
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_incell_panel_fops = {
 	.proc_open = simple_open,
 	.proc_read = proc_incell_panel_info_read,
 };
+#else
+static const struct file_operations proc_incell_panel_fops = {
+	.owner = THIS_MODULE,
+	.open = simple_open,
+	.read = proc_incell_panel_info_read,
+};
+#endif
 
 /*fd_enable - For touch panel face detect
  * Input:
@@ -912,11 +1034,20 @@ static ssize_t proc_fd_enable_read(struct file *file, char __user *buffer,
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops tp_fd_enable_fops = {
 	.proc_write = proc_fd_enable_write,
 	.proc_read  = proc_fd_enable_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations tp_fd_enable_fops = {
+	.write = proc_fd_enable_write,
+	.read  = proc_fd_enable_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 /*event_num - For touch panel face detect input num
  * Output:
@@ -946,10 +1077,18 @@ static ssize_t proc_event_num_read(struct file *file, char __user *buffer,
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops tp_event_num_fops = {
 	.proc_read  = proc_event_num_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations tp_event_num_fops = {
+	.read  = proc_event_num_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 /*touch_count - For face detect touch count
  * Output:
@@ -975,10 +1114,18 @@ static ssize_t proc_fd_touch_read(struct file *file, char __user *buffer,
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops fd_touch_num_fops = {
 	.proc_read  = proc_fd_touch_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations fd_touch_num_fops = {
+	.read  = proc_fd_touch_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 /*fp_enable - For touch panel triger fingerprint
  * Input:
@@ -1055,11 +1202,20 @@ static ssize_t proc_fp_enable_read(struct file *file, char __user *buffer,
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops tp_fp_enable_fops = {
 	.proc_write = proc_fp_enable_write,
 	.proc_read  = proc_fp_enable_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations tp_fp_enable_fops = {
+	.write = proc_fp_enable_write,
+	.read  = proc_fp_enable_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 /*proc/touchpanel/baseline_test*/
 static int tp_auto_test_read_func(struct seq_file *s, void *v)
@@ -1075,11 +1231,20 @@ static int baseline_autotest_open(struct inode *inode, struct file *file)
 	return single_open(file, tp_auto_test_read_func, PDE_DATA(inode));
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops tp_auto_test_proc_fops = {
 	.proc_open  = baseline_autotest_open,
 	.proc_read  = seq_read,
 	.proc_release = single_release,
 };
+#else
+static const struct file_operations tp_auto_test_proc_fops = {
+	.owner = THIS_MODULE,
+	.open  = baseline_autotest_open,
+	.read  = seq_read,
+	.release = single_release,
+};
+#endif
 
 /*black_screen_test - For incell ic black screen test*/
 static ssize_t proc_black_screen_test_read(struct file *file,
@@ -1117,11 +1282,20 @@ static ssize_t proc_black_screen_test_write(struct file *file,
 	return count;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_black_screen_test_fops = {
 	.proc_open  = simple_open,
 	.proc_read  = proc_black_screen_test_read,
 	.proc_write = proc_black_screen_test_write,
 };
+#else
+static const struct file_operations proc_black_screen_test_fops = {
+	.owner = THIS_MODULE,
+	.open  = simple_open,
+	.read  = proc_black_screen_test_read,
+	.write = proc_black_screen_test_write,
+};
+#endif
 
 /*baseline_result - For GKI auto test result*/
 static int tp_auto_test_result_read(struct seq_file *s, void *v)
@@ -1137,11 +1311,20 @@ static int tp_auto_test_result_open(struct inode *inode, struct file *file)
 	return single_open(file, tp_auto_test_result_read, PDE_DATA(inode));
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops tp_auto_test_result_fops = {
 	.proc_open  = tp_auto_test_result_open,
 	.proc_read  = seq_read,
 	.proc_release = single_release,
 };
+#else
+static const struct file_operations tp_auto_test_result_fops = {
+	.owner = THIS_MODULE,
+	.open  = tp_auto_test_result_open,
+	.read  = seq_read,
+	.release = single_release,
+};
+#endif
 
 /*baseline_result - For GKI auto test result*/
 static int tp_black_screen_result_read(struct seq_file *s, void *v)
@@ -1157,11 +1340,20 @@ static int tp_black_screen_result_open(struct inode *inode, struct file *file)
 	return single_open(file, tp_black_screen_result_read, PDE_DATA(inode));
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_black_screen_result_fops = {
 	.proc_open  = tp_black_screen_result_open,
 	.proc_read  = seq_read,
 	.proc_release = single_release,
 };
+#else
+static const struct file_operations proc_black_screen_result_fops = {
+	.owner = THIS_MODULE,
+	.open  = tp_black_screen_result_open,
+	.read  = seq_read,
+	.release = single_release,
+};
+#endif
 
 /*limit_enable - For touch panel direction
  * Output:
@@ -1226,11 +1418,20 @@ static ssize_t proc_dir_control_write(struct file *file,
 	return count;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops touch_dir_proc_fops = {
 	.proc_read  = proc_dir_control_read,
 	.proc_write = proc_dir_control_write,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations touch_dir_proc_fops = {
+	.read  = proc_dir_control_read,
+	.write = proc_dir_control_write,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 static ssize_t proc_rate_white_list_write(struct file *file,
 		const char __user *buffer, size_t count, loff_t *ppos)
@@ -1296,11 +1497,20 @@ static ssize_t proc_rate_white_list_read(struct file *file,
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_rate_white_list_fops = {
 	.proc_write = proc_rate_white_list_write,
 	.proc_read  = proc_rate_white_list_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations proc_rate_white_list_fops = {
+	.write = proc_rate_white_list_write,
+	.read  = proc_rate_white_list_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 static ssize_t proc_switch_usb_state_write(struct file *file,
 		const char __user *buffer, size_t count, loff_t *ppos)
@@ -1357,11 +1567,20 @@ static ssize_t proc_switch_usb_state_read(struct file *file,
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_switch_usb_state_fops = {
 	.proc_write = proc_switch_usb_state_write,
 	.proc_read  = proc_switch_usb_state_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations proc_switch_usb_state_fops = {
+	.write = proc_switch_usb_state_write,
+	.read  = proc_switch_usb_state_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 static ssize_t proc_wireless_charge_detect_write(struct file *file,
 		const char __user *buffer, size_t count, loff_t *ppos)
@@ -1429,11 +1648,20 @@ static ssize_t proc_wireless_charge_detect_read(struct file *file,
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_wireless_charge_detect_fops = {
 	.proc_write = proc_wireless_charge_detect_write,
 	.proc_read  = proc_wireless_charge_detect_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations proc_wireless_charge_detect_fops = {
+	.write = proc_wireless_charge_detect_write,
+	.read  = proc_wireless_charge_detect_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 static ssize_t proc_headset_detect_write(struct file *file,
 		const char __user *buffer, size_t count, loff_t *ppos)
@@ -1489,11 +1717,21 @@ static ssize_t proc_headset_detect_read(struct file *file,
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_headset_detect_fops = {
 	.proc_write = proc_headset_detect_write,
 	.proc_read  = proc_headset_detect_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations proc_headset_detect_fops = {
+	.write = proc_headset_detect_write,
+	.read  = proc_headset_detect_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
+
 
 static ssize_t proc_aging_test_read(struct file *file, char __user *user_buf,
 				    size_t count, loff_t *ppos)
@@ -1576,11 +1814,20 @@ EXIT:
 	return count;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_aging_test_ops = {
 	.proc_write = proc_aging_test_write,
 	.proc_read  = proc_aging_test_read,
 	.proc_open = simple_open,
 };
+#else
+static const struct file_operations proc_aging_test_ops = {
+	.write = proc_aging_test_write,
+	.read  = proc_aging_test_read,
+	.open = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 static ssize_t proc_smooth_level_write(struct file *file,
 				       const char __user *buffer, size_t count, loff_t *ppos)
@@ -1662,11 +1909,20 @@ static ssize_t proc_smooth_level_read(struct file *file, char __user *user_buf,
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_smooth_level_fops = {
 	.proc_write = proc_smooth_level_write,
 	.proc_read  = proc_smooth_level_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations proc_smooth_level_fops = {
+	.write = proc_smooth_level_write,
+	.read  = proc_smooth_level_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 static ssize_t proc_sensitive_level_write(struct file *file,
 		const char __user *buffer, size_t count, loff_t *ppos)
@@ -1746,11 +2002,20 @@ static ssize_t proc_sensitive_level_read(struct file *file,
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_sensitive_level_fops = {
 	.proc_write = proc_sensitive_level_write,
 	.proc_read  = proc_sensitive_level_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations proc_sensitive_level_fops = {
+	.write = proc_sensitive_level_write,
+	.read  = proc_sensitive_level_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 static int calibrate_fops_read_func(struct seq_file *s, void *v)
 {
@@ -1783,11 +2048,20 @@ static int proc_calibrate_fops_open(struct inode *inode, struct file *file)
 	return single_open(file, calibrate_fops_read_func, PDE_DATA(inode));
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_calibrate_fops = {
 	.proc_open  = proc_calibrate_fops_open,
 	.proc_read  = seq_read,
 	.proc_release = single_release,
 };
+#else
+static const struct file_operations proc_calibrate_fops = {
+	.owner = THIS_MODULE,
+	.open  = proc_calibrate_fops_open,
+	.read  = seq_read,
+	.release = single_release,
+};
+#endif
 
 static int cal_status_read_func(struct seq_file *s, void *v)
 {
@@ -1820,11 +2094,20 @@ static int proc_cal_status_fops_open(struct inode *inode, struct file *file)
 }
 
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_cal_status_fops = {
 	.proc_open  = proc_cal_status_fops_open,
 	.proc_read  = seq_read,
 	.proc_release = single_release,
 };
+#else
+static const struct file_operations proc_cal_status_fops = {
+	.owner = THIS_MODULE,
+	.open  = proc_cal_status_fops_open,
+	.read  = seq_read,
+	.release = single_release,
+};
+#endif
 
 /*******Part4:Debug node Function  Area********************/
 
@@ -2370,11 +2653,20 @@ write_exit:
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_oplus_apk_fops = {
 	.proc_open = simple_open,
 	.proc_read = oplus_apk_read,
 	.proc_write = oplus_apk_write,
 };
+#else
+static const struct file_operations proc_oplus_apk_fops = {
+	.owner = THIS_MODULE,
+	.open = simple_open,
+	.read = oplus_apk_read,
+	.write = oplus_apk_write,
+};
+#endif
 
 #endif /*end of CONFIG_OPLUS_TP_APK*/
 
@@ -2447,11 +2739,20 @@ static int data_baseline_open(struct inode *inode, struct file *file)
 	return single_open(file, tp_baseline_debug_read_func, PDE_DATA(inode));
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops tp_baseline_data_proc_fops = {
 	.proc_open = data_baseline_open,
 	.proc_read = seq_read,
 	.proc_release = single_release,
 };
+#else
+static const struct file_operations tp_baseline_data_proc_fops = {
+	.owner = THIS_MODULE,
+	.open = data_baseline_open,
+	.read = seq_read,
+	.release = single_release,
+};
+#endif
 
 /*proc/touchpanel/debug_info/delta*/
 static int tp_delta_debug_read_func(struct seq_file *s, void *v)
@@ -2501,11 +2802,20 @@ static int data_delta_open(struct inode *inode, struct file *file)
 	return single_open(file, tp_delta_debug_read_func, PDE_DATA(inode));
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops tp_delta_data_proc_fops = {
 	.proc_open  = data_delta_open,
 	.proc_read  = seq_read,
 	.proc_release = single_release,
 };
+#else
+static const struct file_operations tp_delta_data_proc_fops = {
+	.owner = THIS_MODULE,
+	.open  = data_delta_open,
+	.read  = seq_read,
+	.release = single_release,
+};
+#endif
 
 /*proc/touchpanel/debug_info/self_delta*/
 static int tp_self_delta_debug_read_func(struct seq_file *s, void *v)
@@ -2549,11 +2859,20 @@ static int data_self_delta_open(struct inode *inode, struct file *file)
 	return single_open(file, tp_self_delta_debug_read_func, PDE_DATA(inode));
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops tp_self_delta_data_proc_fops = {
 	.proc_open  = data_self_delta_open,
 	.proc_read  = seq_read,
 	.proc_release = single_release,
 };
+#else
+static const struct file_operations tp_self_delta_data_proc_fops = {
+	.owner = THIS_MODULE,
+	.open  = data_self_delta_open,
+	.read  = seq_read,
+	.release = single_release,
+};
+#endif
 
 /*proc/touchpanel/debug_info/self_raw*/
 static int tp_self_raw_debug_read_func(struct seq_file *s, void *v)
@@ -2597,11 +2916,20 @@ static int data_self_raw_open(struct inode *inode, struct file *file)
 	return single_open(file, tp_self_raw_debug_read_func, PDE_DATA(inode));
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops tp_self_raw_data_proc_fops = {
 	.proc_open  = data_self_raw_open,
 	.proc_read  = seq_read,
 	.proc_release = single_release,
 };
+#else
+static const struct file_operations tp_self_raw_data_proc_fops = {
+	.owner = THIS_MODULE,
+	.open  = data_self_raw_open,
+	.read  = seq_read,
+	.release = single_release,
+};
+#endif
 
 /*proc/touchpanel/debug_info/main_register*/
 static int tp_main_register_read_func(struct seq_file *s, void *v)
@@ -2656,11 +2984,20 @@ static int main_register_open(struct inode *inode, struct file *file)
 	return single_open(file, tp_main_register_read_func, PDE_DATA(inode));
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops tp_main_register_proc_fops = {
 	.proc_open  = main_register_open,
 	.proc_read  = seq_read,
 	.proc_release = single_release,
 };
+#else
+static const struct file_operations tp_main_register_proc_fops = {
+	.owner = THIS_MODULE,
+	.open  = main_register_open,
+	.read  = seq_read,
+	.release = single_release,
+};
+#endif
 
 /*proc/touchpanel/debug_info/reserve*/
 static int tp_reserve_read_func(struct seq_file *s, void *v)
@@ -2704,11 +3041,20 @@ static int reserve_open(struct inode *inode, struct file *file)
 	return single_open(file, tp_reserve_read_func, PDE_DATA(inode));
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops tp_reserve_proc_fops = {
 	.proc_open  = reserve_open,
 	.proc_read  = seq_read,
 	.proc_release = single_release,
 };
+#else
+static const struct file_operations tp_reserve_proc_fops = {
+	.owner = THIS_MODULE,
+	.open  = reserve_open,
+	.read  = seq_read,
+	.release = single_release,
+};
+#endif
 
 /*proc/touchpanel/debug_info/data_limit*/
 static int tp_limit_data_read_func(struct seq_file *s, void *v)
@@ -2728,11 +3074,20 @@ static int limit_data_open(struct inode *inode, struct file *file)
 	return single_open(file, tp_limit_data_read_func, PDE_DATA(inode));
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops tp_limit_data_proc_fops = {
 	.proc_open  = limit_data_open,
 	.proc_read  = seq_read,
 	.proc_release = single_release,
 };
+#else
+static const struct file_operations tp_limit_data_proc_fops = {
+	.owner = THIS_MODULE,
+	.open  = limit_data_open,
+	.read  = seq_read,
+	.release = single_release,
+};
+#endif
 
 /*proc/touchpanel/debug_info/abs_doze*/
 static int tp_abs_doze_read_func(struct seq_file *s, void *v)
@@ -2776,11 +3131,21 @@ static int abs_doze_open(struct inode *inode, struct file *file)
 	return single_open(file, tp_abs_doze_read_func, PDE_DATA(inode));
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops tp_abs_doze_proc_fops = {
 	.proc_open  = abs_doze_open,
 	.proc_read  = seq_read,
 	.proc_release = single_release,
 };
+#else
+static const struct file_operations tp_abs_doze_proc_fops = {
+	.owner = THIS_MODULE,
+	.open  = abs_doze_open,
+	.read  = seq_read,
+	.release = single_release,
+};
+#endif
+
 
 /*proc/touchpanel/debug_info/snr*/
 static ssize_t proc_snr_write(struct file *file, const char __user *buf,
@@ -2870,11 +3235,20 @@ static int proc_snr_open(struct inode *inode, struct file *file)
 	return single_open(file, tp_baseline_snr_read_func, PDE_DATA(inode));
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_snr_ops = {
 	.proc_open  = proc_snr_open,
 	.proc_read = seq_read,
 	.proc_write = proc_snr_write,
 };
+#else
+static const struct file_operations proc_snr_ops = {
+	.owner = THIS_MODULE,
+	.open = proc_snr_open,
+	.read = seq_read,
+	.write = proc_snr_write,
+};
+#endif
 
 void tp_freq_hop_work(struct work_struct *work)
 {
@@ -2975,11 +3349,20 @@ static ssize_t proc_freq_hop_read(struct file *file, char __user *buffer,
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static const struct proc_ops proc_freq_hop_fops = {
 	.proc_write = proc_freq_hop_write,
 	.proc_read  = proc_freq_hop_read,
 	.proc_open  = simple_open,
 };
+#else
+static const struct file_operations proc_freq_hop_fops = {
+	.write = proc_freq_hop_write,
+	.read  = proc_freq_hop_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
+};
+#endif
 
 /*******Part5:Register node Function  Area********************/
 
@@ -2987,7 +3370,11 @@ typedef struct {
 	char *name;
 	umode_t mode;
 	struct proc_dir_entry *node;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 	const struct proc_ops *fops;
+#else
+	const struct file_operations *fops;
+#endif
 	void *data;
 	bool is_created;/*proc node is creater or not*/
 	bool is_support;/*feature is supported or not*/

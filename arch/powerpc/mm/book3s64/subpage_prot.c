@@ -92,7 +92,7 @@ static void subpage_prot_clear(unsigned long addr, unsigned long len)
 	size_t nw;
 	unsigned long next, limit;
 
-	mmap_write_lock(mm);
+	down_write(&mm->mmap_sem);
 
 	spt = mm_ctx_subpage_prot(&mm->context);
 	if (!spt)
@@ -127,7 +127,7 @@ static void subpage_prot_clear(unsigned long addr, unsigned long len)
 	}
 
 err_out:
-	mmap_write_unlock(mm);
+	up_write(&mm->mmap_sem);
 }
 
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE

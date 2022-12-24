@@ -109,9 +109,6 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/task.h>
 
-#undef CREATE_TRACE_POINTS
-#include <trace/hooks/sched.h>
-
 /*
  * Minimum number of threads to boot the kernel
  */
@@ -496,7 +493,7 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 	LIST_HEAD(uf);
 
 	uprobe_start_dup_mmap();
-	if (mmap_write_lock_killable(oldmm)) {
+	if (down_write_killable(&oldmm->mmap_sem)) {
 		retval = -EINTR;
 		goto fail_uprobe_end;
 	}
@@ -505,7 +502,7 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 	/*
 	 * Not linked in yet - no deadlock potential:
 	 */
-	mmap_write_lock_nested(mm, SINGLE_DEPTH_NESTING);
+	down_write_nested(&mm->mmap_sem, SINGLE_DEPTH_NESTING);
 
 	/* No ordering required: file already has been exposed. */
 	RCU_INIT_POINTER(mm->exe_file, get_mm_exe_file(oldmm));
@@ -630,7 +627,7 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 	/* a new mm has just been created */
 	retval = arch_dup_mmap(oldmm, mm);
 out:
-	mmap_write_unlock(mm);
+	up_write(&mm->mmap_sem);
 	flush_tlb_mm(oldmm);
 
 	if (IS_ENABLED(CONFIG_SPECULATIVE_PAGE_FAULT)) {
@@ -648,7 +645,7 @@ out:
 		}
 	}
 
-	mmap_write_unlock(oldmm);
+	up_write(&oldmm->mmap_sem);
 	dup_userfaultfd_complete(&uf);
 fail_uprobe_end:
 	uprobe_end_dup_mmap();
@@ -678,9 +675,9 @@ static inline void mm_free_pgd(struct mm_struct *mm)
 #else
 static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 {
-	mmap_write_lock(oldmm);
+	down_write(&oldmm->mmap_sem);
 	RCU_INIT_POINTER(mm->exe_file, get_mm_exe_file(oldmm));
-	mmap_write_unlock(oldmm);
+	up_write(&oldmm->mmap_sem);
 	return 0;
 }
 #define mm_alloc_pgd(mm)	(0)
@@ -788,7 +785,6 @@ void __put_task_struct(struct task_struct *tsk)
 	exit_creds(tsk);
 	delayacct_tsk_free(tsk);
 	put_signal_struct(tsk->signal);
-	sched_core_free(tsk);
 
 	if (!profile_handoff_task(tsk))
 		free_task(tsk);
@@ -996,8 +992,6 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 #ifdef CONFIG_MEMCG
 	tsk->active_memcg = NULL;
 #endif
-	memset(&tsk->android_vendor_data1, 0, sizeof(tsk->android_vendor_data1));
-	trace_android_vh_dup_task_struct(tsk, orig);
 	return tsk;
 
 free_stack:
@@ -1065,7 +1059,7 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 #endif
 	atomic_set(&mm->mm_users, 1);
 	atomic_set(&mm->mm_count, 1);
-	mmap_init_lock(mm);
+	init_rwsem(&mm->mmap_sem);
 	INIT_LIST_HEAD(&mm->mmlist);
 	mm->core_state = NULL;
 	mm_pgtables_bytes_init(mm);
@@ -1528,6 +1522,32 @@ out:
 	return error;
 }
 
+static int copy_io(unsigned long clone_flags, struct task_struct *tsk)
+{
+#ifdef CONFIG_BLOCK
+	struct io_context *ioc = current->io_context;
+	struct io_context *new_ioc;
+
+	if (!ioc)
+		return 0;
+	/*
+	 * Share io context with parent, if CLONE_IO is set
+	 */
+	if (clone_flags & CLONE_IO) {
+		ioc_task_link(ioc);
+		tsk->io_context = ioc;
+	} else if (ioprio_valid(ioc->ioprio)) {
+		new_ioc = get_task_io_context(tsk, GFP_KERNEL, NUMA_NO_NODE);
+		if (unlikely(!new_ioc))
+			return -ENOMEM;
+
+		new_ioc->ioprio = ioc->ioprio;
+		put_io_context(new_ioc);
+	}
+#endif
+	return 0;
+}
+
 static int copy_sighand(unsigned long clone_flags, struct task_struct *tsk)
 {
 	struct sighand_struct *sig;
@@ -1545,11 +1565,6 @@ static int copy_sighand(unsigned long clone_flags, struct task_struct *tsk)
 	spin_lock_irq(&current->sighand->siglock);
 	memcpy(sig->action, current->sighand->action, sizeof(sig->action));
 	spin_unlock_irq(&current->sighand->siglock);
-
-	/* Reset all signal handler not set to SIG_IGN to SIG_DFL. */
-	if (clone_flags & CLONE_CLEAR_SIGHAND)
-		flush_signal_handlers(tsk, 0);
-
 	return 0;
 }
 
@@ -2000,7 +2015,7 @@ static __latent_entropy struct task_struct *copy_process(
 #ifdef CONFIG_CPUSETS
 	p->cpuset_mem_spread_rotor = NUMA_NO_NODE;
 	p->cpuset_slab_spread_rotor = NUMA_NO_NODE;
-	seqcount_spinlock_init(&p->mems_allowed_seq, &p->alloc_lock);
+	seqcount_init(&p->mems_allowed_seq);
 #endif
 #ifdef CONFIG_TRACE_IRQFLAGS
 	p->irq_events = 0;
@@ -2080,8 +2095,7 @@ static __latent_entropy struct task_struct *copy_process(
 	stackleak_task_init(p);
 
 	if (pid != &init_struct_pid) {
-		pid = alloc_pid(p->nsproxy->pid_ns_for_children, args->set_tid,
-				args->set_tid_size);
+		pid = alloc_pid(p->nsproxy->pid_ns_for_children);
 		if (IS_ERR(pid)) {
 			retval = PTR_ERR(pid);
 			goto bad_fork_cleanup_thread;
@@ -2154,26 +2168,16 @@ static __latent_entropy struct task_struct *copy_process(
 	INIT_LIST_HEAD(&p->thread_group);
 	p->task_works = NULL;
 
+	cgroup_threadgroup_change_begin(current);
 	/*
 	 * Ensure that the cgroup subsystem policies allow the new process to be
 	 * forked. It should be noted the the new process's css_set can be changed
 	 * between here and cgroup_post_fork() if an organisation operation is in
 	 * progress.
 	 */
-	retval = cgroup_can_fork(p, args);
+	retval = cgroup_can_fork(p);
 	if (retval)
-		goto bad_fork_put_pidfd;
-
-	/*
-	 * Now that the cgroups are pinned, re-clone the parent cgroup and put
-	 * the new task on the correct runqueue. All this *before* the task
-	 * becomes visible.
-	 *
-	 * This isn't part of ->can_fork() because while the re-cloning is
-	 * cgroup specific, it unconditionally needs to place the task on a
-	 * runqueue.
-	 */
-	sched_cgroup_fork(p, args);
+		goto bad_fork_cgroup_threadgroup_change_end;
 
 	/*
 	 * From this point on we must avoid any synchronous user-space
@@ -2207,8 +2211,6 @@ static __latent_entropy struct task_struct *copy_process(
 	}
 
 	klp_copy_process(p);
-
-	sched_core_fork(p);
 
 	spin_lock(&current->sighand->siglock);
 
@@ -2284,8 +2286,8 @@ static __latent_entropy struct task_struct *copy_process(
 		fd_install(pidfd, pidfile);
 
 	proc_fork_connector(p);
-	sched_post_fork(p);
-	cgroup_post_fork(p, args);
+	cgroup_post_fork(p);
+	cgroup_threadgroup_change_end(current);
 	perf_event_fork(p);
 
 	trace_task_newtask(p, clone_flags);
@@ -2296,10 +2298,11 @@ static __latent_entropy struct task_struct *copy_process(
 	return p;
 
 bad_fork_cancel_cgroup:
-	sched_core_free(p);
 	spin_unlock(&current->sighand->siglock);
 	write_unlock_irq(&tasklist_lock);
-	cgroup_cancel_fork(p, args);
+	cgroup_cancel_fork(p);
+bad_fork_cgroup_threadgroup_change_end:
+	cgroup_threadgroup_change_end(current);
 bad_fork_put_pidfd:
 	if (clone_flags & CLONE_PIDFD) {
 		fput(pidfile);
@@ -2339,6 +2342,7 @@ bad_fork_cleanup_perf:
 	perf_event_free_task(p);
 bad_fork_cleanup_policy:
 	lockdep_free_task(p);
+	free_task_load_ptrs(p);
 #ifdef CONFIG_NUMA
 	mpol_put(p->mempolicy);
 bad_fork_cleanup_threadgroup_lock:
@@ -2368,7 +2372,7 @@ static inline void init_idle_pids(struct task_struct *idle)
 	}
 }
 
-struct task_struct * __init fork_idle(int cpu)
+struct task_struct *fork_idle(int cpu)
 {
 	struct task_struct *task;
 	struct kernel_clone_args args = {
@@ -2603,7 +2607,6 @@ noinline static int copy_clone_args_from_user(struct kernel_clone_args *kargs,
 {
 	int err;
 	struct clone_args args;
-	pid_t *kset_tid = kargs->set_tid;
 
 	if (unlikely(usize > PAGE_SIZE))
 		return -E2BIG;
@@ -2614,24 +2617,12 @@ noinline static int copy_clone_args_from_user(struct kernel_clone_args *kargs,
 	if (err)
 		return err;
 
-	if (unlikely(args.set_tid_size > MAX_PID_NS_LEVEL))
-		return -EINVAL;
-
-	if (unlikely(!args.set_tid && args.set_tid_size > 0))
-		return -EINVAL;
-
-	if (unlikely(args.set_tid && args.set_tid_size == 0))
-		return -EINVAL;
-
 	/*
 	 * Verify that higher 32bits of exit_signal are unset and that
 	 * it is a valid signal
 	 */
 	if (unlikely((args.exit_signal & ~((u64)CSIGNAL)) ||
 		     !valid_signal(args.exit_signal)))
-		return -EINVAL;
-
-	if ((args.flags & CLONE_INTO_CGROUP) && args.cgroup < 0)
 		return -EINVAL;
 
 	*kargs = (struct kernel_clone_args){
@@ -2643,16 +2634,7 @@ noinline static int copy_clone_args_from_user(struct kernel_clone_args *kargs,
 		.stack		= args.stack,
 		.stack_size	= args.stack_size,
 		.tls		= args.tls,
-		.set_tid_size	= args.set_tid_size,
-		.cgroup		= args.cgroup,
 	};
-
-	if (args.set_tid &&
-		copy_from_user(kset_tid, u64_to_user_ptr(args.set_tid),
-			(kargs->set_tid_size * sizeof(pid_t))))
-		return -EFAULT;
-
-	kargs->set_tid = kset_tid;
 
 	return 0;
 }
@@ -2687,9 +2669,11 @@ static inline bool clone3_stack_valid(struct kernel_clone_args *kargs)
 
 static bool clone3_args_valid(struct kernel_clone_args *kargs)
 {
-	/* Verify that no unknown flags are passed along. */
-	if (kargs->flags &
-	    ~(CLONE_LEGACY_FLAGS | CLONE_CLEAR_SIGHAND | CLONE_INTO_CGROUP))
+	/*
+	 * All lower bits of the flag word are taken.
+	 * Verify that no other unknown flags are passed along.
+	 */
+	if (kargs->flags & ~CLONE_LEGACY_FLAGS)
 		return false;
 
 	/*
@@ -2697,10 +2681,6 @@ static bool clone3_args_valid(struct kernel_clone_args *kargs)
 	 * - make the CSIGNAL bits reuseable for clone3
 	 */
 	if (kargs->flags & (CLONE_DETACHED | CSIGNAL))
-		return false;
-
-	if ((kargs->flags & (CLONE_SIGHAND | CLONE_CLEAR_SIGHAND)) ==
-	    (CLONE_SIGHAND | CLONE_CLEAR_SIGHAND))
 		return false;
 
 	if ((kargs->flags & (CLONE_THREAD | CLONE_PARENT)) &&
@@ -2729,9 +2709,6 @@ SYSCALL_DEFINE2(clone3, struct clone_args __user *, uargs, size_t, size)
 	int err;
 
 	struct kernel_clone_args kargs;
-	pid_t set_tid[MAX_PID_NS_LEVEL];
-
-	kargs.set_tid = set_tid;
 
 	err = copy_clone_args_from_user(&kargs, uargs, size);
 	if (err)

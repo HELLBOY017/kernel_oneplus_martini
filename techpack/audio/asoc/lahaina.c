@@ -1104,7 +1104,7 @@ static void msm_audio_add_qos_request(void)
 		dev_pm_qos_add_request(get_cpu_device(cpu),
 			&msm_audio_req[cpu],
 			DEV_PM_QOS_RESUME_LATENCY,
-			PM_QOS_CPU_LATENCY_DEFAULT_VALUE);
+			PM_QOS_CPU_DMA_LAT_DEFAULT_VALUE);
 		pr_debug("%s set cpu affinity to core %d.\n", __func__, cpu);
 	}
 }
@@ -5441,8 +5441,8 @@ err:
 
 static int msm_fe_qos_prepare(struct snd_pcm_substream *substream)
 {
-	if (cpu_latency_qos_request_active(&substream->latency_pm_qos_req))
-		cpu_latency_qos_remove_request(&substream->latency_pm_qos_req);
+	if (pm_qos_request_active(&substream->latency_pm_qos_req))
+		pm_qos_remove_request(&substream->latency_pm_qos_req);
 
 	qos_client_active_cnt++;
 	if (qos_client_active_cnt == 1)
@@ -5458,7 +5458,7 @@ static void msm_fe_qos_shutdown(struct snd_pcm_substream *substream)
 	if (qos_client_active_cnt > 0)
 		qos_client_active_cnt--;
 	if (qos_client_active_cnt == 0)
-		msm_audio_update_qos_request(PM_QOS_CPU_LATENCY_DEFAULT_VALUE);
+		msm_audio_update_qos_request(PM_QOS_CPU_DMA_LAT_DEFAULT_VALUE);
 }
 
 void mi2s_disable_audio_vote(struct snd_pcm_substream *substream)
@@ -7744,7 +7744,7 @@ static int msm_snd_card_late_probe(struct snd_soc_card *card)
 	if (!is_wcd937x)
 		ret = wcd938x_mbhc_hs_detect(component, &wcd_mbhc_cfg);
 	else
-		panic("Device is wcd937x, which is unsupported");
+		ret = wcd937x_mbhc_hs_detect(component, &wcd_mbhc_cfg);
 	if (ret) {
 		dev_err(component->dev, "%s: mbhc hs detect failed, err:%d\n",
 			__func__, ret);
@@ -8139,7 +8139,20 @@ static int msm_rx_tx_codec_init(struct snd_soc_pcm_runtime *rtd)
 
 	if (!strncmp(component->driver->name, WCD937X_DRV_NAME,
 	    strlen(WCD937X_DRV_NAME))) {
-		panic("Device is wcd937x, which is unsupported");
+		wcd937x_info_create_codec_entry(pdata->codec_root, component);
+		codec_variant = wcd937x_get_codec_variant(component);
+		dev_dbg(component->dev, "%s: variant %d\n",
+			 __func__, codec_variant);
+		if (codec_variant == WCD9370_VARIANT)
+			ret = snd_soc_add_component_controls(component,
+				msm_int_wcd9370_snd_controls,
+				ARRAY_SIZE(msm_int_wcd9370_snd_controls));
+		else if (codec_variant == WCD9375_VARIANT)
+			ret = snd_soc_add_component_controls(component,
+				msm_int_wcd9375_snd_controls,
+				ARRAY_SIZE(msm_int_wcd9375_snd_controls));
+		bolero_set_port_map(bolero_component,
+			ARRAY_SIZE(sm_port_map_wcd937x), sm_port_map_wcd937x);
 	} else if (!strncmp(component->driver->name, WCD938X_DRV_NAME,
 		   strlen(WCD938X_DRV_NAME))) {
 		wcd938x_info_create_codec_entry(pdata->codec_root, component);

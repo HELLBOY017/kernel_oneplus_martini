@@ -505,7 +505,8 @@ static void tp_gesture_handle(struct touchpanel_data *ts)
 
 	} else if (gesture_info_temp.gesture_type != UNKOWN_GESTURE
 			&& gesture_info_temp.gesture_type != FINGER_PRINTDOWN
-			&& gesture_info_temp.gesture_type != FRINGER_PRINTUP) {
+			&& gesture_info_temp.gesture_type != FRINGER_PRINTUP
+			&& CHK_BIT(ts->gesture_enable_indep, (1 << gesture_info_temp.gesture_type))) {
 		tp_memcpy(&ts->gesture, sizeof(ts->gesture), \
 			  &gesture_info_temp, sizeof(struct gesture_info), \
 			  sizeof(struct gesture_info));
@@ -1044,7 +1045,11 @@ static irqreturn_t tp_irq_thread_fn(int irq, void *dev_id)
 
 	if (ts->pm_qos_state && !ts->is_suspended && !ts->touch_count) {
 		ts->pm_qos_value = PM_QOS_TOUCH_WAKEUP_VALUE;
-		cpu_latency_qos_update_request(&ts->pm_qos_req, ts->pm_qos_value);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
+		dev_pm_qos_update_request(&ts->pm_qos_req, ts->pm_qos_value);
+#else
+		pm_qos_update_request(&ts->pm_qos_req, ts->pm_qos_value);
+#endif
 	}
 
 #endif
@@ -1091,7 +1096,11 @@ exit:
 
 	if (PM_QOS_TOUCH_WAKEUP_VALUE == ts->pm_qos_value) {
 		ts->pm_qos_value = PM_QOS_DEFAULT_VALUE;
-		cpu_latency_qos_update_request(&ts->pm_qos_req, ts->pm_qos_value);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
+		dev_pm_qos_update_request(&ts->pm_qos_req, ts->pm_qos_value);
+#else
+		pm_qos_update_request(&ts->pm_qos_req, ts->pm_qos_value);
+#endif
 	}
 
 #endif
@@ -1361,8 +1370,7 @@ static int init_parse_dts(struct device *dev, struct touchpanel_data *ts)
 	ts->black_gesture_support   = of_property_read_bool(np,
 				      "black_gesture_support");
 
-	ts->black_gesture_indep_support = of_property_read_bool(np,
-					  "black_gesture_indep_support");
+	ts->black_gesture_indep_support = true;
 
 	ts->gesture_test_support    = of_property_read_bool(np,
 				      "black_gesture_test_support");

@@ -256,7 +256,7 @@ void kgsl_pwrscale_enable(struct kgsl_device *device)
 		 * run at default level;
 		 */
 		kgsl_pwrctrl_pwrlevel_change(device,
-					device->pwrctrl.num_pwrlevels - 1);
+					device->pwrctrl.default_pwrlevel);
 		device->pwrscale.enabled = false;
 	}
 }
@@ -677,7 +677,7 @@ static void pwrscale_busmon_create(struct kgsl_device *device,
 	struct device *dev = &pwrscale->busmondev;
 	struct msm_busmon_extended_profile *bus_profile;
 	struct devfreq *bus_devfreq;
-	int i, ret;
+	int i;
 
 	bus_profile = &pwrscale->bus_profile;
 	bus_profile->private_data = &adreno_tz_data;
@@ -704,19 +704,11 @@ static void pwrscale_busmon_create(struct kgsl_device *device,
 		dev_pm_opp_add(dev, pwr->pwrlevels[i].gpu_freq, 0);
 	}
 
-	ret = devfreq_gpubw_init();
-	if (ret) {
-		dev_err(&pdev->dev, "Failed to add busmon governor: %d\n", ret);
-		put_device(dev);
-		return;
-	}
-
 	bus_devfreq = devfreq_add_device(dev, &pwrscale->bus_profile.profile,
 		"gpubw_mon", NULL);
 
 	if (IS_ERR_OR_NULL(bus_devfreq)) {
 		dev_err(&pdev->dev, "Bus scaling not enabled\n");
-		devfreq_gpubw_exit();
 		put_device(dev);
 		return;
 	}
@@ -797,6 +789,9 @@ int kgsl_pwrscale_init(struct kgsl_device *device, struct platform_device *pdev,
 	gpu_profile->profile.get_dev_status = kgsl_devfreq_get_dev_status;
 	gpu_profile->profile.get_cur_freq = kgsl_devfreq_get_cur_freq;
 
+	gpu_profile->profile.initial_freq =
+		pwr->pwrlevels[pwr->default_pwrlevel].gpu_freq;
+
 	gpu_profile->profile.polling_ms = 10;
 
 	pwr->nb.notifier_call = opp_notify;
@@ -872,18 +867,10 @@ int kgsl_pwrscale_init(struct kgsl_device *device, struct platform_device *pdev,
 		return -ENOMEM;
 	}
 
-	ret = msm_adreno_tz_init();
-	if (ret) {
-		dev_err(device->dev, "Failed to add adreno tz governor: %d\n", ret);
-		device->pwrscale.enabled = false;
-		return ret;
-	}
-
 	devfreq = devfreq_add_device(&pdev->dev, &gpu_profile->profile,
 			governor, &adreno_tz_data);
 	if (IS_ERR(devfreq)) {
 		device->pwrscale.enabled = false;
-		msm_adreno_tz_exit();
 		return PTR_ERR(devfreq);
 	}
 
@@ -952,7 +939,6 @@ void kgsl_pwrscale_close(struct kgsl_device *device)
 		flush_workqueue(pwrscale->devfreq_wq);
 		destroy_workqueue(pwrscale->devfreq_wq);
 		pwrscale->devfreq_wq = NULL;
-		devfreq_gpubw_exit();
 	}
 
 	devfreq_remove_device(device->pwrscale.devfreqptr);
@@ -961,7 +947,6 @@ void kgsl_pwrscale_close(struct kgsl_device *device)
 	device->pwrscale.devfreqptr = NULL;
 	srcu_cleanup_notifier_head(&device->pwrscale.nh);
 	dev_pm_opp_unregister_notifier(&device->pdev->dev, &pwr->nb);
-	msm_adreno_tz_exit();
 }
 
 static void do_devfreq_suspend(struct work_struct *work)

@@ -432,11 +432,9 @@ static inline vm_fault_t do_exception(struct pt_regs *regs, int access)
 	flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
 	if (user_mode(regs))
 		flags |= FAULT_FLAG_USER;
-	if ((trans_exc_code & store_indication) == 0x400)
-		access = VM_WRITE;
-	if (access == VM_WRITE)
+	if (access == VM_WRITE || (trans_exc_code & store_indication) == 0x400)
 		flags |= FAULT_FLAG_WRITE;
-	mmap_read_lock(mm);
+	down_read(&mm->mmap_sem);
 
 	gmap = NULL;
 	if (IS_ENABLED(CONFIG_PGSTE) && type == GMAP_FAULT) {
@@ -521,7 +519,7 @@ retry:
 			flags &= ~(FAULT_FLAG_ALLOW_RETRY |
 				   FAULT_FLAG_RETRY_NOWAIT);
 			flags |= FAULT_FLAG_TRIED;
-			mmap_read_lock(mm);
+			down_read(&mm->mmap_sem);
 			goto retry;
 		}
 	}
@@ -539,7 +537,7 @@ retry:
 	}
 	fault = 0;
 out_up:
-	mmap_read_unlock(mm);
+	up_read(&mm->mmap_sem);
 out:
 	return fault;
 }

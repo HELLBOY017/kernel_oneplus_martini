@@ -152,7 +152,7 @@ struct oplus_gpio_info oplus_gpio_info_table[MAX_GPIOS] = {
 };
 static struct delayed_work recover_work;
 
-static int dual_sim_det_uim2_to_real_sim(void)
+static int dual_sim_det_uim2_to_real_sim()
 {
 	int esim_status = -1;
 
@@ -250,11 +250,11 @@ static int dual_sim_det_proc_open(struct inode *inode, struct file *file)
 	return single_open(file, dual_sim_det_show, PDE_DATA(inode));
 }
 
-static const struct proc_ops dual_sim_det_fops = {
-	.proc_open = dual_sim_det_proc_open,
-	.proc_read = seq_read,
-	.proc_lseek = seq_lseek,
-	.proc_release = single_release,
+static const struct file_operations dual_sim_det_fops = {
+	.open = dual_sim_det_proc_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
 };
 
 static int dual_sim_det_init(struct platform_device *pdev, void *gpio_info_ptr)
@@ -503,6 +503,7 @@ static const struct of_device_id oplus_gpio_dt_ids[] = {
 MODULE_DEVICE_TABLE(of, oplus_gpio_dt_ids);
 
 static const struct file_operations oplus_gpio_fops = {
+	.owner =    THIS_MODULE,
 	.unlocked_ioctl = oplus_gpio_ioctl,
 	.open           = oplus_gpio_open,
 	.read           = oplus_gpio_read,
@@ -510,7 +511,7 @@ static const struct file_operations oplus_gpio_fops = {
 
 
 extern char *saved_command_line;
-static void init_esim_status(void)
+static void init_esim_status()
 {
 	if (strstr(saved_command_line, "esim.status=1")) {
 		oplus_gpio_info_table[GPIO_TYPE_ESIM].gpio_status = 1;

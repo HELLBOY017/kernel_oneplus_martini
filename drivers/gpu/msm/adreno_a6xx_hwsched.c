@@ -183,7 +183,7 @@ static int a6xx_hwsched_gmu_first_boot(struct adreno_device *adreno_dev)
 	a6xx_gmu_irq_enable(adreno_dev);
 
 	/* Vote for minimal DDR BW for GMU to init */
-	level = pwr->pwrlevels[pwr->num_pwrlevels - 1].bus_min;
+	level = pwr->pwrlevels[pwr->default_pwrlevel].bus_min;
 
 	icc_set_bw(pwr->icc_path, 0, MBps_to_icc(pwr->ddr_table[level]));
 
@@ -334,8 +334,8 @@ static int a6xx_hwsched_notify_slumber(struct adreno_device *adreno_dev)
 	CMD_MSG_HDR(req, H2F_MSG_PREPARE_SLUMBER);
 
 	req.freq = gmu->hfi.dcvs_table.gpu_level_num -
-			pwr->num_pwrlevels - 1 - 1;
-	req.bw = pwr->pwrlevels[pwr->num_pwrlevels - 1].bus_freq;
+			pwr->default_pwrlevel - 1;
+	req.bw = pwr->pwrlevels[pwr->default_pwrlevel].bus_freq;
 
 	/* Disable the power counter so that the GMU is not busy */
 	gmu_core_regwrite(device, A6XX_GMU_CX_GMU_POWER_COUNTER_ENABLE, 0);
@@ -480,6 +480,9 @@ static void a6xx_hwsched_touch_wakeup(struct adreno_device *adreno_dev)
 		!test_bit(GMU_PRIV_FIRST_BOOT_DONE, &gmu->flags))
 		return;
 
+	if (test_bit(GMU_PRIV_GPU_STARTED, &gmu->flags))
+		goto done;
+
 	trace_kgsl_pwr_request_state(device, KGSL_STATE_ACTIVE);
 
 	ret = a6xx_hwsched_gmu_boot(adreno_dev);
@@ -498,6 +501,16 @@ static void a6xx_hwsched_touch_wakeup(struct adreno_device *adreno_dev)
 	device->state = KGSL_STATE_ACTIVE;
 
 	trace_kgsl_pwr_set_state(device, KGSL_STATE_ACTIVE);
+
+done:
+	/*
+	 * When waking up from a touch event we want to stay active long enough
+	 * for the user to send a draw command.  The default idle timer timeout
+	 * is shorter than we want so go ahead and push the idle timer out
+	 * further for this special case
+	 */
+	mod_timer(&device->idle_timer, jiffies +
+		msecs_to_jiffies(adreno_wake_timeout));
 }
 
 static int a6xx_hwsched_boot(struct adreno_device *adreno_dev)

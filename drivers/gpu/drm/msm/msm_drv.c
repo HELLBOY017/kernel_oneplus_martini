@@ -516,7 +516,8 @@ static int msm_drm_init(struct device *dev, struct drm_driver *drv)
 			goto err_msm_uninit;
 		}
 
-		sched_set_fifo(priv->event_thread[i].thread);
+		ret = sched_setscheduler(priv->event_thread[i].thread,
+					 SCHED_FIFO, &param);
 		if (ret)
 			dev_warn(dev, "event_thread set priority failed:%d\n",
 				 ret);

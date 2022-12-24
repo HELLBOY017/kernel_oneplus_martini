@@ -6,6 +6,9 @@
  * Copyright (C) 1996-2000 Russell King - Converted to ARM.
  * Copyright (C) 2012 ARM Ltd.
  */
+
+#include <stdarg.h>
+
 #include <linux/compat.h>
 #include <linux/efi.h>
 #include <linux/export.h>
@@ -149,11 +152,11 @@ void arch_cpu_idle_dead(void)
  * to execute e.g. a RAM-based pin loop is not sufficient. This allows the
  * kexec'd kernel to use any and all RAM as it sees fit, without having to
  * avoid any code or data used by any SW CPU pin loop. The CPU hotplug
- * functionality embodied in smpt_shutdown_nonboot_cpus() to achieve this.
+ * functionality embodied in disable_nonboot_cpus() to achieve this.
  */
 void machine_shutdown(void)
 {
-	smp_shutdown_nonboot_cpus(reboot_cpu);
+	disable_nonboot_cpus();
 }
 
 /*
@@ -603,25 +606,8 @@ unsigned long arch_align_stack(unsigned long sp)
  */
 void arch_setup_new_exec(void)
 {
-	unsigned long mmflags = 0;
+	current->mm->context.flags = is_compat_task() ? MMCF_AARCH32 : 0;
 
-	if (is_compat_task()) {
-		mmflags = MMCF_AARCH32;
-
-		/*
-		 * Restrict the CPU affinity mask for a 32-bit task so that
-		 * it contains only 32-bit-capable CPUs.
-		 *
-		 * From the perspective of the task, this looks similar to
-		 * what would happen if the 64-bit-only CPUs were hot-unplugged
-		 * at the point of execve(), although we try a bit harder to
-		 * honour the cpuset hierarchy.
-		 */
-		if (static_branch_unlikely(&arm64_mismatched_32bit_el0))
-			force_compatible_cpus_allowed_ptr(current);
-	}
-
-	current->mm->context.flags = mmflags;
 	ptrauth_thread_init_user(current);
 	erratum_1418040_new_exec();
 }

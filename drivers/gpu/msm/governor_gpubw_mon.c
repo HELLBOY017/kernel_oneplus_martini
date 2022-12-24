@@ -4,6 +4,7 @@
  */
 
 #include <linux/devfreq.h>
+#include <linux/module.h>
 #include <linux/slab.h>
 
 #include "../../devfreq/governor.h"
@@ -260,6 +261,9 @@ static int devfreq_gpubw_event_handler(struct devfreq *devfreq,
 	int result = 0;
 	unsigned long freq;
 
+	if (strcmp(dev_name(devfreq->dev.parent), "kgsl-busmon"))
+		return -EINVAL;
+
 	mutex_lock(&devfreq->lock);
 	freq = devfreq->previous_freq;
 	switch (event) {
@@ -299,12 +303,13 @@ static struct devfreq_governor devfreq_gpubw = {
 	.immutable = 1,
 };
 
-int devfreq_gpubw_init(void)
+static int __init devfreq_gpubw_init(void)
 {
 	return devfreq_add_governor(&devfreq_gpubw);
 }
+subsys_initcall(devfreq_gpubw_init);
 
-void devfreq_gpubw_exit(void)
+static void __exit devfreq_gpubw_exit(void)
 {
 	int ret;
 
@@ -313,3 +318,8 @@ void devfreq_gpubw_exit(void)
 		pr_err("%s: failed remove governor %d\n", __func__, ret);
 
 }
+module_exit(devfreq_gpubw_exit);
+
+MODULE_DESCRIPTION("GPU bus bandwidth voting driver. Uses VBIF counters");
+MODULE_LICENSE("GPL v2");
+

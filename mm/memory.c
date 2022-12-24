@@ -1248,7 +1248,7 @@ static inline unsigned long zap_pud_range(struct mmu_gather *tlb,
 		next = pud_addr_end(addr, end);
 		if (pud_trans_huge(*pud) || pud_devmap(*pud)) {
 			if (next - addr != HPAGE_PUD_SIZE) {
-				mmap_assert_locked(tlb->mm);
+				VM_BUG_ON_VMA(!rwsem_is_locked(&tlb->mm->mmap_sem), vma);
 				split_huge_pud(vma, pud, addr);
 			} else if (zap_huge_pud(tlb, vma, pud, addr))
 				goto next;
@@ -1555,7 +1555,7 @@ int vm_insert_page(struct vm_area_struct *vma, unsigned long addr,
 	if (!page_count(page))
 		return -EINVAL;
 	if (!(vma->vm_flags & VM_MIXEDMAP)) {
-		BUG_ON(mmap_read_trylock(vma->vm_mm));
+		BUG_ON(down_read_trylock(&vma->vm_mm->mmap_sem));
 		BUG_ON(vma->vm_flags & VM_PFNMAP);
 		vma->vm_flags |= VM_MIXEDMAP;
 	}
@@ -4130,6 +4130,11 @@ static inline vm_fault_t wp_huge_pmd(struct vm_fault *vmf, pmd_t orig_pmd)
 	return VM_FAULT_FALLBACK;
 }
 
+static inline bool vma_is_accessible(struct vm_area_struct *vma)
+{
+	return vma->vm_flags & (VM_READ | VM_EXEC | VM_WRITE);
+}
+
 static vm_fault_t create_huge_pud(struct vm_fault *vmf)
 {
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
@@ -4387,9 +4392,6 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 	struct vm_fault vmf = {
 		.address = address,
 	};
-#ifdef CONFIG_NUMA
-	struct mempolicy *pol;
-#endif
 	pgd_t *pgd, pgdval;
 	p4d_t *p4d, p4dval;
 	pud_t pudval;
@@ -4453,6 +4455,8 @@ int __handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 		goto out_segv;
 
 #ifdef CONFIG_NUMA
+	struct mempolicy *pol;
+
 	/*
 	 * MPOL_INTERLEAVE implies additional checks in
 	 * mpol_misplaced() which are not compatible with the
@@ -4942,7 +4946,7 @@ int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
 	void *old_buf = buf;
 	int write = gup_flags & FOLL_WRITE;
 
-	if (mmap_read_lock_killable(mm))
+	if (down_read_killable(&mm->mmap_sem))
 		return 0;
 
 	/* ignore errors, just check how much was successfully transferred */
@@ -4987,13 +4991,13 @@ int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
 						    buf, maddr + offset, bytes);
 			}
 			kunmap(page);
-			put_user_page(page);
+			put_page(page);
 		}
 		len -= bytes;
 		buf += bytes;
 		addr += bytes;
 	}
-	mmap_read_unlock(mm);
+	up_read(&mm->mmap_sem);
 
 	return buf - old_buf;
 }
@@ -5050,7 +5054,7 @@ void print_vma_addr(char *prefix, unsigned long ip)
 	/*
 	 * we might be running from an atomic context so we cannot sleep
 	 */
-	if (!mmap_read_trylock(mm))
+	if (!down_read_trylock(&mm->mmap_sem))
 		return;
 
 	vma = find_vma(mm, ip);
@@ -5069,7 +5073,7 @@ void print_vma_addr(char *prefix, unsigned long ip)
 			free_page((unsigned long)buf);
 		}
 	}
-	mmap_read_unlock(mm);
+	up_read(&mm->mmap_sem);
 }
 
 #if defined(CONFIG_PROVE_LOCKING) || defined(CONFIG_DEBUG_ATOMIC_SLEEP)
@@ -5088,7 +5092,7 @@ void __might_fault(const char *file, int line)
 	__might_sleep(file, line, 0);
 #if defined(CONFIG_DEBUG_ATOMIC_SLEEP)
 	if (current->mm)
-		might_lock_read(&current->mm->mmap_lock);
+		might_lock_read(&current->mm->mmap_sem);
 #endif
 }
 EXPORT_SYMBOL(__might_fault);

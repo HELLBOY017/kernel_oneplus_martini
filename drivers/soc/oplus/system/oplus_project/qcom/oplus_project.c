@@ -329,7 +329,7 @@ uint32_t get_oplus_feature(enum F_INDEX index)
 EXPORT_SYMBOL(get_oplus_feature);
 
 #define SERIALNO_LEN 16
-unsigned int get_serialID(void)
+unsigned int get_serialID()
 {
 	unsigned int serial_id = 0xFFFFFFFF;
 
@@ -554,7 +554,7 @@ static int project_read_func(struct seq_file *s, void *v)
 	return 0;
 }
 
-unsigned int get_cdt_version(void)
+unsigned int get_cdt_version()
 {
 	init_project_version();
 
@@ -566,10 +566,11 @@ static int projects_open(struct inode *inode, struct file *file)
 	return single_open(file, project_read_func, PDE_DATA(inode));
 }
 
-static const struct proc_ops project_info_fops = {
-	.proc_open  = projects_open,
-	.proc_read  = seq_read,
-	.proc_release = single_release,
+static const struct file_operations project_info_fops = {
+	.owner = THIS_MODULE,
+	.open  = projects_open,
+	.read  = seq_read,
+	.release = single_release,
 };
 
 static int __init oplus_project_init(void)

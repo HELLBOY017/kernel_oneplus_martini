@@ -76,9 +76,10 @@ static ssize_t proc_sim_detect_read(struct file *file,
 }
 
 
-static const struct proc_ops sim_detect_ops = {
-	.proc_read  = proc_sim_detect_read,
-	.proc_open  = simple_open,
+static const struct file_operations sim_detect_ops = {
+	.read  = proc_sim_detect_read,
+	.open  = simple_open,
+	.owner = THIS_MODULE,
 };
 
 static int sim_card_detect_init(struct sim_detect_data *sim_detect_data)

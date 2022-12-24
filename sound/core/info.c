@@ -16,6 +16,7 @@
 #include <linux/utsname.h>
 #include <linux/proc_fs.h>
 #include <linux/mutex.h>
+#include <stdarg.h>
 
 int snd_info_check_reserved_words(const char *str)
 {
@@ -148,9 +149,9 @@ static loff_t snd_info_entry_llseek(struct file *file, loff_t offset, int orig)
 	entry = data->entry;
 	mutex_lock(&entry->access);
 	if (entry->c.ops->llseek) {
-		ret = entry->c.ops->llseek(entry,
-					   data->file_private_data,
-					   file, offset, orig);
+		offset = entry->c.ops->llseek(entry,
+					      data->file_private_data,
+					      file, offset, orig);
 		goto out;
 	}
 
@@ -318,16 +319,17 @@ static int snd_info_entry_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static const struct proc_ops snd_info_entry_operations =
+static const struct file_operations snd_info_entry_operations =
 {
-	.proc_lseek	= snd_info_entry_llseek,
-	.proc_read	= snd_info_entry_read,
-	.proc_write	= snd_info_entry_write,
-	.proc_poll	= snd_info_entry_poll,
-	.proc_ioctl	= snd_info_entry_ioctl,
-	.proc_mmap	= snd_info_entry_mmap,
-	.proc_open	= snd_info_entry_open,
-	.proc_release	= snd_info_entry_release,
+	.owner =		THIS_MODULE,
+	.llseek =		snd_info_entry_llseek,
+	.read =			snd_info_entry_read,
+	.write =		snd_info_entry_write,
+	.poll =			snd_info_entry_poll,
+	.unlocked_ioctl =	snd_info_entry_ioctl,
+	.mmap =			snd_info_entry_mmap,
+	.open =			snd_info_entry_open,
+	.release =		snd_info_entry_release,
 };
 
 /*
@@ -456,13 +458,14 @@ static int snd_info_text_entry_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static const struct proc_ops snd_info_text_entry_ops =
+static const struct file_operations snd_info_text_entry_ops =
 {
-	.proc_open	= snd_info_text_entry_open,
-	.proc_release	= snd_info_text_entry_release,
-	.proc_write	= snd_info_text_entry_write,
-	.proc_lseek	= seq_lseek,
-	.proc_read	= seq_read,
+	.owner =		THIS_MODULE,
+	.open =			snd_info_text_entry_open,
+	.release =		snd_info_text_entry_release,
+	.write =		snd_info_text_entry_write,
+	.llseek =		seq_lseek,
+	.read =			seq_read,
 };
 
 static struct snd_info_entry *create_subdir(struct module *mod,
@@ -867,7 +870,7 @@ static int __snd_info_register(struct snd_info_entry *entry)
 			return -ENOMEM;
 		}
 	} else {
-		const struct proc_ops *ops;
+		const struct file_operations *ops;
 		if (entry->content == SNDRV_INFO_CONTENT_DATA)
 			ops = &snd_info_entry_operations;
 		else

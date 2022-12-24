@@ -277,19 +277,8 @@ struct css_set {
 	struct rcu_head rcu_head;
 };
 
-struct ext_css_set {
-	struct css_set cset;
-
-	struct list_head mg_src_preload_node;
-	struct list_head mg_dst_preload_node;
-};
-
 struct cgroup_base_stat {
 	struct task_cputime cputime;
-
-#ifdef CONFIG_SCHED_CORE
-	u64 forceidle_sum;
-#endif
 };
 
 /*
@@ -470,7 +459,7 @@ struct cgroup {
 	struct list_head rstat_css_list;
 
 	/* cgroup basic resource statistics */
-	struct cgroup_base_stat last_bstat;
+	struct cgroup_base_stat pending_bstat;	/* pending from children */
 	struct cgroup_base_stat bstat;
 	struct prev_cputime prev_cputime;	/* for printing out cputime */
 
@@ -488,7 +477,7 @@ struct cgroup {
 	struct work_struct release_agent_work;
 
 	/* used to track pressure stalls */
-	struct psi_group *psi;
+	struct psi_group psi;
 
 	/* used to store eBPF programs */
 	struct cgroup_bpf bpf;
@@ -653,9 +642,8 @@ struct cgroup_subsys {
 	void (*cancel_attach)(struct cgroup_taskset *tset);
 	void (*attach)(struct cgroup_taskset *tset);
 	void (*post_attach)(void);
-	int (*can_fork)(struct task_struct *task,
-			struct css_set *cset);
-	void (*cancel_fork)(struct task_struct *task, struct css_set *cset);
+	int (*can_fork)(struct task_struct *task);
+	void (*cancel_fork)(struct task_struct *task);
 	void (*fork)(struct task_struct *task);
 	void (*exit)(struct task_struct *task);
 	void (*release)(struct task_struct *task);

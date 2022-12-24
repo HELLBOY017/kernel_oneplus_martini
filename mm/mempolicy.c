@@ -379,13 +379,13 @@ void mpol_rebind_mm(struct mm_struct *mm, nodemask_t *new)
 {
 	struct vm_area_struct *vma;
 
-	mmap_write_lock(mm);
+	down_write(&mm->mmap_sem);
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
 		vm_write_begin(vma);
 		mpol_rebind_policy(vma->vm_policy, new);
 		vm_write_end(vma);
 	}
-	mmap_write_unlock(mm);
+	up_write(&mm->mmap_sem);
 }
 
 static const struct mempolicy_operations mpol_ops[MPOL_MAX] = {
@@ -647,7 +647,8 @@ static int queue_pages_test_walk(unsigned long start, unsigned long end,
 
 	if (flags & MPOL_MF_LAZY) {
 		/* Similar to task_numa_work, skip inaccessible VMAs */
-		if (!is_vm_hugetlb_page(vma) && vma_is_accessible(vma) &&
+		if (!is_vm_hugetlb_page(vma) &&
+			(vma->vm_flags & (VM_READ | VM_EXEC | VM_WRITE)) &&
 			!(vma->vm_flags & VM_MIXEDMAP))
 			change_prot_numa(vma, start, endvma);
 		return 1;
@@ -869,7 +870,7 @@ static int lookup_node(struct mm_struct *mm, unsigned long addr)
 		put_page(p);
 	}
 	if (locked)
-		mmap_read_unlock(mm);
+		up_read(&mm->mmap_sem);
 	return err;
 }
 
@@ -902,10 +903,10 @@ static long do_get_mempolicy(int *policy, nodemask_t *nmask,
 		 * vma/shared policy at addr is NULL.  We
 		 * want to return MPOL_DEFAULT in this case.
 		 */
-		mmap_read_lock(mm);
+		down_read(&mm->mmap_sem);
 		vma = find_vma_intersection(mm, addr, addr+1);
 		if (!vma) {
-			mmap_read_unlock(mm);
+			up_read(&mm->mmap_sem);
 			return -EFAULT;
 		}
 		if (vma->vm_ops && vma->vm_ops->get_policy)
@@ -964,7 +965,7 @@ static long do_get_mempolicy(int *policy, nodemask_t *nmask,
  out:
 	mpol_cond_put(pol);
 	if (vma)
-		mmap_read_unlock(mm);
+		up_read(&mm->mmap_sem);
 	if (pol_refcount)
 		mpol_put(pol_refcount);
 	return err;
@@ -1073,7 +1074,7 @@ int do_migrate_pages(struct mm_struct *mm, const nodemask_t *from,
 	if (err)
 		return err;
 
-	mmap_read_lock(mm);
+	down_read(&mm->mmap_sem);
 
 	/*
 	 * Find a 'source' bit set in 'tmp' whose corresponding 'dest'
@@ -1154,7 +1155,7 @@ int do_migrate_pages(struct mm_struct *mm, const nodemask_t *from,
 		if (err < 0)
 			break;
 	}
-	mmap_read_unlock(mm);
+	up_read(&mm->mmap_sem);
 	if (err < 0)
 		return err;
 	return busy;
@@ -1277,12 +1278,12 @@ static long do_mbind(unsigned long start, unsigned long len,
 	{
 		NODEMASK_SCRATCH(scratch);
 		if (scratch) {
-			mmap_write_lock(mm);
+			down_write(&mm->mmap_sem);
 			task_lock(current);
 			err = mpol_set_nodemask(new, nmask, scratch);
 			task_unlock(current);
 			if (err)
-				mmap_write_unlock(mm);
+				up_write(&mm->mmap_sem);
 		} else
 			err = -ENOMEM;
 		NODEMASK_SCRATCH_FREE(scratch);
@@ -1319,7 +1320,7 @@ up_out:
 			putback_movable_pages(&pagelist);
 	}
 
-	mmap_write_unlock(mm);
+	up_write(&mm->mmap_sem);
 mpol_out:
 	mpol_put(new);
 	return err;
@@ -2144,21 +2145,17 @@ alloc_pages_vma(gfp_t gfp, int order, struct vm_area_struct *vma,
 		nmask = policy_nodemask(gfp, pol);
 		if (!nmask || node_isset(hpage_node, *nmask)) {
 			mpol_cond_put(pol);
-			/*
-			 * First, try to allocate THP only on local node, but
-			 * don't reclaim unnecessarily, just compact.
-			 */
 			page = __alloc_pages_node(hpage_node,
-				gfp | __GFP_THISNODE | __GFP_NORETRY, order);
+						gfp | __GFP_THISNODE, order);
 
 			/*
 			 * If hugepage allocations are configured to always
 			 * synchronous compact or the vma has been madvised
 			 * to prefer hugepage backing, retry allowing remote
-			 * memory with both reclaim and compact as well.
+			 * memory as well.
 			 */
 			if (!page && (gfp & __GFP_DIRECT_RECLAIM))
-				page = __alloc_pages_nodemask(gfp,
+				page = __alloc_pages_nodemask(gfp | __GFP_NORETRY,
 							order, hpage_node,
 							nmask);
 

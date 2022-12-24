@@ -384,7 +384,8 @@ int gntdev_map_grant_pages(struct gntdev_grant_map *map)
 	for (i = 0; i < map->count; i++) {
 		if (map->map_ops[i].status == GNTST_okay) {
 			map->unmap_ops[i].handle = map->map_ops[i].handle;
-			alloced++;
+			if (!use_ptemod)
+				alloced++;
 		} else if (!err)
 			err = -EINVAL;
 
@@ -393,7 +394,8 @@ int gntdev_map_grant_pages(struct gntdev_grant_map *map)
 
 		if (use_ptemod) {
 			if (map->kmap_ops[i].status == GNTST_okay) {
-				alloced++;
+				if (map->map_ops[i].status == GNTST_okay)
+					alloced++;
 				map->kunmap_ops[i].handle = map->kmap_ops[i].handle;
 			} else if (!err)
 				err = -EINVAL;
@@ -409,42 +411,20 @@ static void __unmap_grant_pages_done(int result,
 	unsigned int i;
 	struct gntdev_grant_map *map = data->data;
 	unsigned int offset = data->unmap_ops - map->unmap_ops;
-	int successful_unmaps = 0;
-	int live_grants;
 
 	for (i = 0; i < data->count; i++) {
-		if (map->unmap_ops[offset + i].status == GNTST_okay &&
-		    map->unmap_ops[offset + i].handle != -1)
-			successful_unmaps++;
-
 		WARN_ON(map->unmap_ops[offset+i].status &&
 			map->unmap_ops[offset+i].handle != -1);
 		pr_debug("unmap handle=%d st=%d\n",
 			map->unmap_ops[offset+i].handle,
 			map->unmap_ops[offset+i].status);
 		map->unmap_ops[offset+i].handle = -1;
-		if (use_ptemod) {
-			if (map->kunmap_ops[offset + i].status == GNTST_okay &&
-			    map->kunmap_ops[offset + i].handle != -1)
-				successful_unmaps++;
-
-			WARN_ON(map->kunmap_ops[offset+i].status &&
-				map->kunmap_ops[offset+i].handle != -1);
-			pr_debug("kunmap handle=%u st=%d\n",
-				 map->kunmap_ops[offset+i].handle,
-				 map->kunmap_ops[offset+i].status);
-			map->kunmap_ops[offset+i].handle = -1;
-		}
 	}
-
 	/*
 	 * Decrease the live-grant counter.  This must happen after the loop to
 	 * prevent premature reuse of the grants by gnttab_mmap().
 	 */
-	live_grants = atomic_sub_return(successful_unmaps, &map->live_grants);
-	if (WARN_ON(live_grants < 0))
-		pr_err("%s: live_grants became negative (%d) after unmapping %d pages!\n",
-		       __func__, live_grants, successful_unmaps);
+	atomic_sub(data->count, &map->live_grants);
 
 	/* Release reference taken by __unmap_grant_pages */
 	gntdev_put_map(NULL, map);
@@ -813,7 +793,7 @@ static long gntdev_ioctl_get_offset_for_vaddr(struct gntdev_priv *priv,
 		return -EFAULT;
 	pr_debug("priv %p, offset for vaddr %lx\n", priv, (unsigned long)op.vaddr);
 
-	mmap_read_lock(current->mm);
+	down_read(&current->mm->mmap_sem);
 	vma = find_vma(current->mm, op.vaddr);
 	if (!vma || vma->vm_ops != &gntdev_vmops)
 		goto out_unlock;
@@ -827,7 +807,7 @@ static long gntdev_ioctl_get_offset_for_vaddr(struct gntdev_priv *priv,
 	rv = 0;
 
  out_unlock:
-	mmap_read_unlock(current->mm);
+	up_read(&current->mm->mmap_sem);
 
 	if (rv == 0 && copy_to_user(u, &op, sizeof(op)) != 0)
 		return -EFAULT;

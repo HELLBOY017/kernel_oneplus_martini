@@ -1536,7 +1536,7 @@ static int add_page_for_migration(struct mm_struct *mm, unsigned long addr,
 	unsigned int follflags;
 	int err;
 
-	mmap_read_lock(mm);
+	down_read(&mm->mmap_sem);
 	err = -EFAULT;
 	vma = find_vma(mm, addr);
 	if (!vma || addr < vma->vm_start || !vma_migratable(vma))
@@ -1589,7 +1589,7 @@ out_putpage:
 	 */
 	put_page(page);
 out:
-	mmap_read_unlock(mm);
+	up_read(&mm->mmap_sem);
 	return err;
 }
 
@@ -1721,7 +1721,7 @@ static void do_pages_stat_array(struct mm_struct *mm, unsigned long nr_pages,
 {
 	unsigned long i;
 
-	mmap_read_lock(mm);
+	down_read(&mm->mmap_sem);
 
 	for (i = 0; i < nr_pages; i++) {
 		unsigned long addr = (unsigned long)(*pages);
@@ -1748,7 +1748,7 @@ set_status:
 		status++;
 	}
 
-	mmap_read_unlock(mm);
+	up_read(&mm->mmap_sem);
 }
 
 /*
@@ -2345,13 +2345,12 @@ next:
 		migrate->dst[migrate->npages] = 0;
 		migrate->src[migrate->npages++] = mpfn;
 	}
+	arch_leave_lazy_mmu_mode();
+	pte_unmap_unlock(ptep - 1, ptl);
 
 	/* Only flush the TLB if we actually modified any entries */
 	if (unmapped)
 		flush_tlb_range(walk->vma, start, end);
-
-	arch_leave_lazy_mmu_mode();
-	pte_unmap_unlock(ptep - 1, ptl);
 
 	return 0;
 }

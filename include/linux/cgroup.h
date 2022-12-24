@@ -27,8 +27,6 @@
 
 #include <linux/cgroup-defs.h>
 
-struct kernel_clone_args;
-
 #ifdef CONFIG_CGROUPS
 
 /*
@@ -60,6 +58,9 @@ struct css_task_iter {
 	struct list_head		*tcset_head;
 
 	struct list_head		*task_pos;
+	struct list_head		*tasks_head;
+	struct list_head		*mg_tasks_head;
+	struct list_head		*dying_tasks_head;
 
 	struct list_head		*cur_tasks_head;
 	struct css_set			*cur_cset;
@@ -69,8 +70,7 @@ struct css_task_iter {
 };
 
 extern struct cgroup_root cgrp_dfl_root;
-extern struct ext_css_set init_ext_css_set;
-#define init_css_set init_ext_css_set.cset
+extern struct css_set init_css_set;
 
 #define SUBSYS(_x) extern struct cgroup_subsys _x ## _cgrp_subsys;
 #include <linux/cgroup_subsys.h>
@@ -122,12 +122,9 @@ int proc_cgroup_show(struct seq_file *m, struct pid_namespace *ns,
 		     struct pid *pid, struct task_struct *tsk);
 
 void cgroup_fork(struct task_struct *p);
-extern int cgroup_can_fork(struct task_struct *p,
-			   struct kernel_clone_args *kargs);
-extern void cgroup_cancel_fork(struct task_struct *p,
-			       struct kernel_clone_args *kargs);
-extern void cgroup_post_fork(struct task_struct *p,
-			     struct kernel_clone_args *kargs);
+extern int cgroup_can_fork(struct task_struct *p);
+extern void cgroup_cancel_fork(struct task_struct *p);
+extern void cgroup_post_fork(struct task_struct *p);
 void cgroup_exit(struct task_struct *p);
 void cgroup_release(struct task_struct *p);
 void cgroup_free(struct task_struct *p);
@@ -154,6 +151,7 @@ struct task_struct *cgroup_taskset_first(struct cgroup_taskset *tset,
 struct task_struct *cgroup_taskset_next(struct cgroup_taskset *tset,
 					struct cgroup_subsys_state **dst_cssp);
 
+void cgroup_enable_task_cg_lists(void);
 void css_task_iter_start(struct cgroup_subsys_state *css, unsigned int flags,
 			 struct css_task_iter *it);
 struct task_struct *css_task_iter_next(struct css_task_iter *it);
@@ -669,7 +667,7 @@ static inline void pr_cont_cgroup_path(struct cgroup *cgrp)
 
 static inline struct psi_group *cgroup_psi(struct cgroup *cgrp)
 {
-	return cgrp->psi;
+	return &cgrp->psi;
 }
 
 bool cgroup_psi_enabled(void);
@@ -713,12 +711,9 @@ static inline int cgroupstats_build(struct cgroupstats *stats,
 				    struct dentry *dentry) { return -EINVAL; }
 
 static inline void cgroup_fork(struct task_struct *p) {}
-static inline int cgroup_can_fork(struct task_struct *p,
-				  struct kernel_clone_args *kargs) { return 0; }
-static inline void cgroup_cancel_fork(struct task_struct *p,
-				      struct kernel_clone_args *kargs) {}
-static inline void cgroup_post_fork(struct task_struct *p,
-				    struct kernel_clone_args *kargs) {}
+static inline int cgroup_can_fork(struct task_struct *p) { return 0; }
+static inline void cgroup_cancel_fork(struct task_struct *p) {}
+static inline void cgroup_post_fork(struct task_struct *p) {}
 static inline void cgroup_exit(struct task_struct *p) {}
 static inline void cgroup_release(struct task_struct *p) {}
 static inline void cgroup_free(struct task_struct *p) {}
@@ -790,9 +785,11 @@ static inline void cgroup_account_cputime(struct task_struct *task,
 
 	cpuacct_charge(task, delta_exec);
 
+	rcu_read_lock();
 	cgrp = task_dfl_cgroup(task);
 	if (cgroup_parent(cgrp))
 		__cgroup_account_cputime(cgrp, delta_exec);
+	rcu_read_unlock();
 }
 
 static inline void cgroup_account_cputime_field(struct task_struct *task,
@@ -803,9 +800,11 @@ static inline void cgroup_account_cputime_field(struct task_struct *task,
 
 	cpuacct_account_field(task, index, delta_exec);
 
+	rcu_read_lock();
 	cgrp = task_dfl_cgroup(task);
 	if (cgroup_parent(cgrp))
 		__cgroup_account_cputime_field(cgrp, index, delta_exec);
+	rcu_read_unlock();
 }
 
 #else	/* CONFIG_CGROUPS */

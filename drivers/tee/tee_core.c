@@ -182,9 +182,6 @@ tee_ioctl_shm_register(struct tee_context *ctx,
 	if (data.flags)
 		return -EINVAL;
 
-	if (!access_ok((void __user *)(unsigned long)data.addr, data.length))
-		return -EFAULT;
-
 	shm = tee_shm_register(ctx, data.addr, data.length,
 			       TEE_SHM_DMA_BUF | TEE_SHM_USER_MAPPED);
 	if (IS_ERR(shm))
@@ -682,7 +679,7 @@ static const struct file_operations tee_fops = {
 	.open = tee_open,
 	.release = tee_release,
 	.unlocked_ioctl = tee_ioctl,
-	.compat_ioctl = compat_ptr_ioctl,
+	.compat_ioctl = tee_ioctl,
 };
 
 static void tee_release_device(struct device *dev)

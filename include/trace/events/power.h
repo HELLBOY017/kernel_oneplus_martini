@@ -431,50 +431,75 @@ DEFINE_EVENT(power_domain, power_domain_target,
 );
 
 /*
- * CPU latency QoS events used for global CPU latency QoS list updates
+ * The pm qos events are used for pm qos update
  */
-DECLARE_EVENT_CLASS(cpu_latency_qos_request,
+DECLARE_EVENT_CLASS(pm_qos_request,
 
-	TP_PROTO(s32 value),
+	TP_PROTO(int pm_qos_class, s32 value),
 
-	TP_ARGS(value),
+	TP_ARGS(pm_qos_class, value),
 
 	TP_STRUCT__entry(
+		__field( int,                    pm_qos_class   )
 		__field( s32,                    value          )
 	),
 
 	TP_fast_assign(
+		__entry->pm_qos_class = pm_qos_class;
 		__entry->value = value;
 	),
 
-	TP_printk("CPU_DMA_LATENCY value=%d",
+	TP_printk("pm_qos_class=%s value=%d",
+		  __print_symbolic(__entry->pm_qos_class,
+			{ PM_QOS_CPU_DMA_LATENCY,	"CPU_DMA_LATENCY" }),
 		  __entry->value)
 );
 
-DEFINE_EVENT(cpu_latency_qos_request, pm_qos_add_request,
+DEFINE_EVENT(pm_qos_request, pm_qos_add_request,
 
-	TP_PROTO(s32 value),
+	TP_PROTO(int pm_qos_class, s32 value),
 
-	TP_ARGS(value)
+	TP_ARGS(pm_qos_class, value)
 );
 
-DEFINE_EVENT(cpu_latency_qos_request, pm_qos_update_request,
+DEFINE_EVENT(pm_qos_request, pm_qos_update_request,
 
-	TP_PROTO(s32 value),
+	TP_PROTO(int pm_qos_class, s32 value),
 
-	TP_ARGS(value)
+	TP_ARGS(pm_qos_class, value)
 );
 
-DEFINE_EVENT(cpu_latency_qos_request, pm_qos_remove_request,
+DEFINE_EVENT(pm_qos_request, pm_qos_remove_request,
 
-	TP_PROTO(s32 value),
+	TP_PROTO(int pm_qos_class, s32 value),
 
-	TP_ARGS(value)
+	TP_ARGS(pm_qos_class, value)
 );
 
-/*
- * General PM QoS events used for updates of PM QoS request lists
- */
+TRACE_EVENT(pm_qos_update_request_timeout,
+
+	TP_PROTO(int pm_qos_class, s32 value, unsigned long timeout_us),
+
+	TP_ARGS(pm_qos_class, value, timeout_us),
+
+	TP_STRUCT__entry(
+		__field( int,                    pm_qos_class   )
+		__field( s32,                    value          )
+		__field( unsigned long,          timeout_us     )
+	),
+
+	TP_fast_assign(
+		__entry->pm_qos_class = pm_qos_class;
+		__entry->value = value;
+		__entry->timeout_us = timeout_us;
+	),
+
+	TP_printk("pm_qos_class=%s value=%d, timeout_us=%ld",
+		  __print_symbolic(__entry->pm_qos_class,
+			{ PM_QOS_CPU_DMA_LATENCY,	"CPU_DMA_LATENCY" }),
+		  __entry->value, __entry->timeout_us)
+);
+
 DECLARE_EVENT_CLASS(pm_qos_update,
 
 	TP_PROTO(enum pm_qos_req_action action, int prev_value, int curr_value),
@@ -788,13 +813,60 @@ TRACE_EVENT(memlat_dev_update,
 		__entry->vote)
 );
 
-DECLARE_TRACE(sugov_util_update_tp,
-	TP_PROTO(unsigned int cpu, unsigned long util, unsigned long max_cap, unsigned int flags),
-	TP_ARGS(cpu, util, max_cap, flags));
+TRACE_EVENT(sugov_util_update,
+	    TP_PROTO(int cpu,
+		     unsigned long util, unsigned long avg_cap,
+		     unsigned long max_cap, unsigned long nl, unsigned long pl,
+		     unsigned int rtgb, unsigned int flags),
+	    TP_ARGS(cpu, util, avg_cap, max_cap, nl, pl, rtgb, flags),
+	    TP_STRUCT__entry(
+		    __field(int, cpu)
+		    __field(unsigned long, util)
+		    __field(unsigned long, avg_cap)
+		    __field(unsigned long, max_cap)
+		    __field(unsigned long, nl)
+		    __field(unsigned long, pl)
+		    __field(unsigned int, rtgb)
+		    __field(unsigned int, flags)
+	    ),
+	    TP_fast_assign(
+		    __entry->cpu = cpu;
+		    __entry->util = util;
+		    __entry->avg_cap = avg_cap;
+		    __entry->max_cap = max_cap;
+		    __entry->nl = nl;
+		    __entry->pl = pl;
+		    __entry->rtgb = rtgb;
+		    __entry->flags = flags;
+	    ),
+	    TP_printk("cpu=%d util=%lu avg_cap=%lu max_cap=%lu nl=%lu pl=%lu rtgb=%u flags=0x%x",
+		      __entry->cpu, __entry->util, __entry->avg_cap,
+		      __entry->max_cap, __entry->nl,
+		      __entry->pl, __entry->rtgb, __entry->flags)
+);
 
-DECLARE_TRACE(sugov_next_freq_tp,
-	TP_PROTO(unsigned int cpu, unsigned long util, unsigned long max, unsigned int freq),
-	TP_ARGS(cpu, util, max, freq));
+TRACE_EVENT(sugov_next_freq,
+	    TP_PROTO(unsigned int cpu, unsigned long util, unsigned long max,
+		     unsigned int freq),
+	    TP_ARGS(cpu, util, max, freq),
+	    TP_STRUCT__entry(
+		    __field(unsigned int, cpu)
+		    __field(unsigned long, util)
+		    __field(unsigned long, max)
+		    __field(unsigned int, freq)
+	    ),
+	    TP_fast_assign(
+		    __entry->cpu = cpu;
+		    __entry->util = util;
+		    __entry->max = max;
+		    __entry->freq = freq;
+	    ),
+	    TP_printk("cpu=%u util=%lu max=%lu freq=%u",
+		      __entry->cpu,
+		      __entry->util,
+		      __entry->max,
+		      __entry->freq)
+);
 
 #endif /* _TRACE_POWER_H */
 

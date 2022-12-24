@@ -15,6 +15,22 @@
 #include "ion_trace.h"
 #include "ion_private.h"
 
+static atomic_long_t total_heap_bytes;
+
+static void track_buffer_created(struct ion_buffer *buffer)
+{
+	long total = atomic_long_add_return(buffer->size, &total_heap_bytes);
+
+	trace_ion_stat(buffer->sg_table, buffer->size, total);
+}
+
+static void track_buffer_destroyed(struct ion_buffer *buffer)
+{
+	long total = atomic_long_sub_return(buffer->size, &total_heap_bytes);
+
+	trace_ion_stat(buffer->sg_table, -buffer->size, total);
+}
+
 /* this function should only be called while dev->lock is held */
 static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 					    struct ion_device *dev,
@@ -50,8 +66,24 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 		goto err1;
 	}
 
+	spin_lock(&heap->stat_lock);
+	heap->num_of_buffers++;
+	heap->num_of_alloc_bytes += len;
+	if (heap->num_of_alloc_bytes > heap->alloc_bytes_wm)
+		heap->alloc_bytes_wm = heap->num_of_alloc_bytes;
+	if (heap->num_of_buffers == 1) {
+		/* This module reference lasts as long as at least one
+		 * buffer is allocated from the heap. We are protected
+		 * against ion_device_remove_heap() with dev->lock, so we can
+		 * safely assume the module reference is going to* succeed.
+		 */
+		__module_get(heap->owner);
+	}
+	spin_unlock(&heap->stat_lock);
+
 	INIT_LIST_HEAD(&buffer->attachments);
 	mutex_init(&buffer->lock);
+	track_buffer_created(buffer);
 	return buffer;
 
 err1:
@@ -188,6 +220,13 @@ void ion_buffer_release(struct ion_buffer *buffer)
 		ion_heap_unmap_kernel(buffer->heap, buffer);
 	}
 	buffer->heap->ops->free(buffer);
+	spin_lock(&buffer->heap->stat_lock);
+	buffer->heap->num_of_buffers--;
+	buffer->heap->num_of_alloc_bytes -= buffer->size;
+	if (buffer->heap->num_of_buffers == 0)
+		module_put(buffer->heap->owner);
+	spin_unlock(&buffer->heap->stat_lock);
+	/* drop reference to the heap module */
 
 	kfree(buffer);
 }
@@ -202,6 +241,8 @@ int ion_buffer_destroy(struct ion_device *dev, struct ion_buffer *buffer)
 	}
 
 	heap = buffer->heap;
+	track_buffer_destroyed(buffer);
+
 	if (heap->flags & ION_HEAP_FLAG_DEFER_FREE)
 		ion_heap_freelist_add(heap, buffer);
 	else
@@ -239,4 +280,9 @@ void ion_buffer_kmap_put(struct ion_buffer *buffer)
 		ion_heap_unmap_kernel(buffer->heap, buffer);
 		buffer->vaddr = NULL;
 	}
+}
+
+u64 ion_get_total_heap_bytes(void)
+{
+	return atomic_long_read(&total_heap_bytes);
 }

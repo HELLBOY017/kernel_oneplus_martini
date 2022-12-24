@@ -2258,7 +2258,7 @@ static long gpumem_free_entry_on_timestamp(struct kgsl_device *device,
 	kgsl_readtimestamp(device, context, KGSL_TIMESTAMP_RETIRED, &temp);
 	trace_kgsl_mem_timestamp_queue(device, entry, context->id, temp,
 		timestamp);
-	ret = kgsl_add_low_prio_event(device, &context->events,
+	ret = kgsl_add_event(device, &context->events,
 		timestamp, gpumem_free_func, entry);
 
 	if (ret)
@@ -2499,15 +2499,15 @@ static int memdesc_sg_virt(struct kgsl_memdesc *memdesc, unsigned long useraddr)
 		goto out;
 	}
 
-	mmap_read_lock(current->mm);
+	down_read(&current->mm->mmap_sem);
 	if (!check_vma(useraddr, memdesc->size)) {
-		mmap_read_unlock(current->mm);
+		up_read(&current->mm->mmap_sem);
 		ret = -EFAULT;
 		goto out;
 	}
 
 	npages = get_user_pages(useraddr, sglen, write, pages, NULL);
-	mmap_read_unlock(current->mm);
+	up_read(&current->mm->mmap_sem);
 
 	ret = (npages < 0) ? (int)npages : 0;
 	if (ret)
@@ -2615,13 +2615,13 @@ static int kgsl_setup_dmabuf_useraddr(struct kgsl_device *device,
 	 * Find the VMA containing this pointer and figure out if it
 	 * is a dma-buf.
 	 */
-	mmap_read_lock(current->mm);
+	down_read(&current->mm->mmap_sem);
 	vma = find_vma(current->mm, hostptr);
 
 	if (vma && vma->vm_file) {
 		ret = check_vma_flags(vma, entry->memdesc.flags);
 		if (ret) {
-			mmap_read_unlock(current->mm);
+			up_read(&current->mm->mmap_sem);
 			return ret;
 		}
 
@@ -2630,7 +2630,7 @@ static int kgsl_setup_dmabuf_useraddr(struct kgsl_device *device,
 		 * already mapped
 		 */
 		if (vma->vm_file->f_op == &kgsl_fops) {
-			mmap_read_unlock(current->mm);
+			up_read(&current->mm->mmap_sem);
 			return -EFAULT;
 		}
 
@@ -2641,14 +2641,14 @@ static int kgsl_setup_dmabuf_useraddr(struct kgsl_device *device,
 	}
 
 	if (!dmabuf) {
-		mmap_read_unlock(current->mm);
+		up_read(&current->mm->mmap_sem);
 		return -ENODEV;
 	}
 
 	ret = kgsl_setup_dma_buf(device, pagetable, entry, dmabuf);
 	if (ret) {
 		dma_buf_put(dmabuf);
-		mmap_read_unlock(current->mm);
+		up_read(&current->mm->mmap_sem);
 		return ret;
 	}
 
@@ -2662,7 +2662,7 @@ static int kgsl_setup_dmabuf_useraddr(struct kgsl_device *device,
 	else
 		entry->memdesc.flags &= ~((u64) KGSL_MEMFLAGS_IOCOHERENT);
 
-	mmap_read_unlock(current->mm);
+	up_read(&current->mm->mmap_sem);
 	return 0;
 }
 #else
@@ -4293,9 +4293,6 @@ static void _unregister_device(struct kgsl_device *device)
 {
 	int minor;
 
-	if (device->gpu_sysfs_kobj.state_initialized)
-		kobject_del(&device->gpu_sysfs_kobj);
-
 	mutex_lock(&kgsl_driver.devlock);
 	for (minor = 0; minor < ARRAY_SIZE(kgsl_driver.devp); minor++) {
 		if (device == kgsl_driver.devp[minor]) {
@@ -4487,6 +4484,12 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 	device->pwrctrl.interrupt_num = status;
 	disable_irq(device->pwrctrl.interrupt_num);
 
+	rwlock_init(&device->context_lock);
+	spin_lock_init(&device->submit_lock);
+
+	idr_init(&device->timelines);
+	spin_lock_init(&device->timelines_lock);
+
 	device->events_wq = alloc_workqueue("kgsl-events",
 		WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_SYSFS | WQ_HIGHPRI, 0);
 
@@ -4500,12 +4503,6 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 	status = kgsl_mmu_probe(device);
 	if (status != 0)
 		goto error_pwrctrl_close;
-
-	rwlock_init(&device->context_lock);
-	spin_lock_init(&device->submit_lock);
-
-	idr_init(&device->timelines);
-	spin_lock_init(&device->timelines_lock);
 
 	kgsl_device_debugfs_init(device);
 
@@ -4539,6 +4536,9 @@ void kgsl_device_platform_remove(struct kgsl_device *device)
 	}
 
 	kgsl_device_snapshot_close(device);
+
+	if (device->gpu_sysfs_kobj.state_initialized)
+		kobject_del(&device->gpu_sysfs_kobj);
 
 	idr_destroy(&device->context_idr);
 	idr_destroy(&device->timelines);
@@ -4604,7 +4604,7 @@ void kgsl_core_exit(void)
 int __init kgsl_core_init(void)
 {
 	int result = 0;
-	struct sched_param param = { .sched_priority = 16 };
+	struct sched_param param = { .sched_priority = 2 };
 
 	place_marker("M - DRIVER KGSL Init");
 
@@ -4695,22 +4695,11 @@ int __init kgsl_core_init(void)
 		&kgsl_driver.worker, "kgsl_worker_thread");
 
 	if (IS_ERR(kgsl_driver.worker_thread)) {
-		pr_err("kgsl: unable to start kgsl_worker_thread\n");
-		goto err;
-	}
-
-	kthread_init_worker(&kgsl_driver.low_prio_worker);
-
-	kgsl_driver.low_prio_worker_thread = kthread_run(
-		kthread_worker_fn, &kgsl_driver.low_prio_worker, "kgsl_low_prio_worker_thread");
-
-	if (IS_ERR(kgsl_driver.low_prio_worker_thread)) {
-		pr_err("kgsl: unable to start kgsl_low_prio_worker_thread\n");
+		pr_err("kgsl: unable to start kgsl thread\n");
 		goto err;
 	}
 
 	sched_setscheduler(kgsl_driver.worker_thread, SCHED_FIFO, &param);
-	/* kgsl_driver.low_prio_worker_thread should not be SCHED_FIFO */
 
 	kgsl_events_init();
 

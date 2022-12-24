@@ -64,6 +64,7 @@ void cgroup_rstat_updated(struct cgroup *cgrp, int cpu)
 
 	raw_spin_unlock_irqrestore(cpu_lock, flags);
 }
+EXPORT_SYMBOL_GPL(cgroup_rstat_updated);
 
 /**
  * cgroup_rstat_cpu_pop_updated - iterate and dismantle rstat_cpu updated tree
@@ -285,60 +286,52 @@ void __init cgroup_rstat_boot(void)
 
 	for_each_possible_cpu(cpu)
 		raw_spin_lock_init(per_cpu_ptr(&cgroup_rstat_cpu_lock, cpu));
+
+	BUG_ON(cgroup_rstat_init(&cgrp_dfl_root.cgrp));
 }
 
 /*
  * Functions for cgroup basic resource statistics implemented on top of
  * rstat.
  */
-static void cgroup_base_stat_add(struct cgroup_base_stat *dst_bstat,
-				 struct cgroup_base_stat *src_bstat)
+static void cgroup_base_stat_accumulate(struct cgroup_base_stat *dst_bstat,
+					struct cgroup_base_stat *src_bstat)
 {
 	dst_bstat->cputime.utime += src_bstat->cputime.utime;
 	dst_bstat->cputime.stime += src_bstat->cputime.stime;
 	dst_bstat->cputime.sum_exec_runtime += src_bstat->cputime.sum_exec_runtime;
-#ifdef CONFIG_SCHED_CORE
-	dst_bstat->forceidle_sum += src_bstat->forceidle_sum;
-#endif
-}
-
-static void cgroup_base_stat_sub(struct cgroup_base_stat *dst_bstat,
-				 struct cgroup_base_stat *src_bstat)
-{
-	dst_bstat->cputime.utime -= src_bstat->cputime.utime;
-	dst_bstat->cputime.stime -= src_bstat->cputime.stime;
-	dst_bstat->cputime.sum_exec_runtime -= src_bstat->cputime.sum_exec_runtime;
-#ifdef CONFIG_SCHED_CORE
-	dst_bstat->forceidle_sum -= src_bstat->forceidle_sum;
-#endif
 }
 
 static void cgroup_base_stat_flush(struct cgroup *cgrp, int cpu)
 {
 	struct cgroup *parent = cgroup_parent(cgrp);
 	struct cgroup_rstat_cpu *rstatc = cgroup_rstat_cpu(cgrp, cpu);
-	struct cgroup_base_stat cur, delta;
+	struct task_cputime *last_cputime = &rstatc->last_bstat.cputime;
+	struct task_cputime cputime;
+	struct cgroup_base_stat delta;
 	unsigned seq;
 
 	/* fetch the current per-cpu values */
 	do {
 		seq = __u64_stats_fetch_begin(&rstatc->bsync);
-		cur.cputime = rstatc->bstat.cputime;
+		cputime = rstatc->bstat.cputime;
 	} while (__u64_stats_fetch_retry(&rstatc->bsync, seq));
 
-	/* propagate percpu delta to global */
-	delta = cur;
-	cgroup_base_stat_sub(&delta, &rstatc->last_bstat);
-	cgroup_base_stat_add(&cgrp->bstat, &delta);
-	cgroup_base_stat_add(&rstatc->last_bstat, &delta);
+	/* calculate the delta to propgate */
+	delta.cputime.utime = cputime.utime - last_cputime->utime;
+	delta.cputime.stime = cputime.stime - last_cputime->stime;
+	delta.cputime.sum_exec_runtime = cputime.sum_exec_runtime -
+					 last_cputime->sum_exec_runtime;
+	*last_cputime = cputime;
 
-	/* propagate global delta to parent */
-	if (parent) {
-		delta = cgrp->bstat;
-		cgroup_base_stat_sub(&delta, &cgrp->last_bstat);
-		cgroup_base_stat_add(&parent->bstat, &delta);
-		cgroup_base_stat_add(&cgrp->last_bstat, &delta);
-	}
+	/* transfer the pending stat into delta */
+	cgroup_base_stat_accumulate(&delta, &cgrp->pending_bstat);
+	memset(&cgrp->pending_bstat, 0, sizeof(cgrp->pending_bstat));
+
+	/* propagate delta into the global stat and the parent's pending */
+	cgroup_base_stat_accumulate(&cgrp->bstat, &delta);
+	if (parent)
+		cgroup_base_stat_accumulate(&parent->pending_bstat, &delta);
 }
 
 static struct cgroup_rstat_cpu *
@@ -385,11 +378,6 @@ void __cgroup_account_cputime_field(struct cgroup *cgrp,
 	case CPUTIME_SOFTIRQ:
 		rstatc->bstat.cputime.stime += delta_exec;
 		break;
-#ifdef CONFIG_SCHED_CORE
-	case CPUTIME_FORCEIDLE:
-		rstatc->bstat.forceidle_sum += delta_exec;
-		break;
-#endif
 	default:
 		break;
 	}
@@ -397,88 +385,25 @@ void __cgroup_account_cputime_field(struct cgroup *cgrp,
 	cgroup_base_stat_cputime_account_end(cgrp, rstatc);
 }
 
-/*
- * compute the cputime for the root cgroup by getting the per cpu data
- * at a global level, then categorizing the fields in a manner consistent
- * with how it is done by __cgroup_account_cputime_field for each bit of
- * cpu time attributed to a cgroup.
- */
-static void root_cgroup_cputime(struct cgroup_base_stat *bstat)
-{
-	struct task_cputime *cputime = &bstat->cputime;
-	int i;
-
-	cputime->stime = 0;
-	cputime->utime = 0;
-	cputime->sum_exec_runtime = 0;
-	for_each_possible_cpu(i) {
-		struct kernel_cpustat kcpustat;
-		u64 *cpustat = kcpustat.cpustat;
-		u64 user = 0;
-		u64 sys = 0;
-
-		kcpustat_cpu_fetch(&kcpustat, i);
-
-		user += cpustat[CPUTIME_USER];
-		user += cpustat[CPUTIME_NICE];
-		cputime->utime += user;
-
-		sys += cpustat[CPUTIME_SYSTEM];
-		sys += cpustat[CPUTIME_IRQ];
-		sys += cpustat[CPUTIME_SOFTIRQ];
-		cputime->stime += sys;
-
-		cputime->sum_exec_runtime += user;
-		cputime->sum_exec_runtime += sys;
-		cputime->sum_exec_runtime += cpustat[CPUTIME_STEAL];
-
-#ifdef CONFIG_SCHED_CORE
-		bstat->forceidle_sum += cpustat[CPUTIME_FORCEIDLE];
-#endif
-	}
-}
-
 void cgroup_base_stat_cputime_show(struct seq_file *seq)
 {
 	struct cgroup *cgrp = seq_css(seq)->cgroup;
 	u64 usage, utime, stime;
-	struct cgroup_base_stat bstat;
-#ifdef CONFIG_SCHED_CORE
-	u64 forceidle_time;
-#endif
 
-	if (cgroup_parent(cgrp)) {
-		cgroup_rstat_flush_hold(cgrp);
-		usage = cgrp->bstat.cputime.sum_exec_runtime;
-		cputime_adjust(&cgrp->bstat.cputime, &cgrp->prev_cputime,
-			       &utime, &stime);
-#ifdef CONFIG_SCHED_CORE
-		forceidle_time = cgrp->bstat.forceidle_sum;
-#endif
-		cgroup_rstat_flush_release();
-	} else {
-		root_cgroup_cputime(&bstat);
-		usage = bstat.cputime.sum_exec_runtime;
-		utime = bstat.cputime.utime;
-		stime = bstat.cputime.stime;
-#ifdef CONFIG_SCHED_CORE
-		forceidle_time = bstat.forceidle_sum;
-#endif
-	}
+	if (!cgroup_parent(cgrp))
+		return;
+
+	cgroup_rstat_flush_hold(cgrp);
+	usage = cgrp->bstat.cputime.sum_exec_runtime;
+	cputime_adjust(&cgrp->bstat.cputime, &cgrp->prev_cputime, &utime, &stime);
+	cgroup_rstat_flush_release();
 
 	do_div(usage, NSEC_PER_USEC);
 	do_div(utime, NSEC_PER_USEC);
 	do_div(stime, NSEC_PER_USEC);
-#ifdef CONFIG_SCHED_CORE
-	do_div(forceidle_time, NSEC_PER_USEC);
-#endif
 
 	seq_printf(seq, "usage_usec %llu\n"
 		   "user_usec %llu\n"
 		   "system_usec %llu\n",
 		   usage, utime, stime);
-
-#ifdef CONFIG_SCHED_CORE
-	seq_printf(seq, "core_sched.force_idle_usec %llu\n", forceidle_time);
-#endif
 }

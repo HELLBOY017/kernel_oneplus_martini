@@ -651,6 +651,15 @@ config MAX_STACK_SIZE_MB
 
 	  A sane initial value is 80 MB.
 
+config BALANCE_ANON_FILE_RECLAIM
+	bool "During reclaim treat anon and file backed pages equally"
+	depends on SWAP
+	help
+	  When performing memory reclaim treat anonymous and file backed pages
+	  equally.
+	  Swapping anonymous pages out to memory can be efficient enough to justify
+	  treating anonymous and file backed pages equally.
+
 config DEFERRED_STRUCT_PAGE_INIT
 	bool "Defer initialisation of struct pages to kthreads"
 	depends on SPARSEMEM
@@ -666,18 +675,10 @@ config DEFERRED_STRUCT_PAGE_INIT
 	  lifetime of the system until these kthreads finish the
 	  initialisation.
 
-config PAGE_IDLE_FLAG
-	bool
-	select PAGE_EXTENSION if !64BIT
-	help
-	  This adds PG_idle and PG_young flags to 'struct page'.  PTE Accessed
-	  bit writers can set the state of the bit in the flags so that PTE
-	  Accessed bit readers may avoid disturbance.
-
 config IDLE_PAGE_TRACKING
 	bool "Enable idle page tracking"
 	depends on SYSFS && MMU
-	select PAGE_IDLE_FLAG
+	select PAGE_EXTENSION if !64BIT
 	help
 	  This feature allows to estimate the amount of user pages that have
 	  not been touched during a given period of time. This information can
@@ -823,7 +824,32 @@ config ARCH_HAS_PTE_SPECIAL
 config ARCH_HAS_HUGEPD
 	bool
 
-source "mm/damon/Kconfig"
+config PRIORITIZE_OOM_TASKS
+	bool "Attempt to further prioritize OOM killer kills"
+	depends on QGKI
+	help
+	  When the OOM killer selects a task to kill it considers all tasks
+	  with a oom_score_adj value > OOM_SCORE_ADJ_MIN. This doesn't work
+	  well when the OS has 'high priority' tasks which should only be
+	  considered for killing after all other 'lower priority' tasks
+	  have first been killed.
+
+	  Enable this option to impose a limit on the minimum task
+	  oom_score_adj which should first be considered for killing
+	  before allowing the OOM killer to select tasks without
+	  limitation.
+
+	  If unsure, say N.
+
+config OOM_TASK_PRIORITY_ADJ_LIMIT
+	int "Min oom_score_adj when priotizing OOM killer kills"
+	depends on PRIORITIZE_OOM_TASKS
+	range -1000 1000
+	default 0
+	help
+	  With this parameter you can limit the OOM killer to first kill
+	  tasks with an oom_score_adj value above a certain threshold
+	  before considering tasks with a lower oom_score_adj value.
 
 endmenu
 

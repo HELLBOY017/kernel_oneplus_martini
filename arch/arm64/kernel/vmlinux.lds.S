@@ -128,6 +128,9 @@ SECTIONS
 	}
 	.text : {			/* Real text segment		*/
 		_stext = .;		/* Text and read-only data	*/
+			__exception_text_start = .;
+			*(.exception.text)
+			__exception_text_end = .;
 			IRQENTRY_TEXT
 			SOFTIRQENTRY_TEXT
 			ENTRY_TEXT
@@ -184,11 +187,11 @@ SECTIONS
 	. = ALIGN(4);
 	.altinstructions : {
 		__alt_instructions = .;
-		KEEP(*(.altinstructions))
+		*(.altinstructions)
 		__alt_instructions_end = .;
 	}
 	.altinstr_replacement : {
-		KEEP(*(.altinstr_replacement))
+		*(.altinstr_replacement)
 	}
 
 	. = ALIGN(PAGE_SIZE);

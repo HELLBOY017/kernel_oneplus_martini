@@ -21,12 +21,6 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/dcvsh.h>
 
-#if IS_ENABLED(CONFIG_PIXEL_EM)
-#include "../../kernel/sched/vendor_sched/pixel_em.h"
-struct pixel_em_profile **cpufreq_hw_pixel_em_profile;
-EXPORT_SYMBOL_GPL(cpufreq_hw_pixel_em_profile);
-#endif
-
 #define LUT_MAX_ENTRIES			40U
 #define LUT_SRC				GENMASK(31, 30)
 #define LUT_L_VAL			GENMASK(7, 0)
@@ -36,7 +30,7 @@ EXPORT_SYMBOL_GPL(cpufreq_hw_pixel_em_profile);
 #define CLK_HW_DIV			2
 #define GT_IRQ_STATUS			BIT(2)
 #define MAX_FN_SIZE			20
-#define LIMITS_POLLING_DELAY_MS		4
+#define LIMITS_POLLING_DELAY_MS		10
 #define MAX_ROW				2
 
 #define CYCLE_CNTR_OFFSET(c, m, acc_count)				\
@@ -107,6 +101,7 @@ static const u16 cpufreq_qcom_epss_std_offsets[REG_ARRAY_SIZE] = {
 };
 
 static struct cpufreq_qcom *qcom_freq_domain_map[NR_CPUS];
+static struct cpufreq_counter qcom_cpufreq_counter[NR_CPUS];
 
 static unsigned int qcom_cpufreq_hw_get(unsigned int cpu);
 
@@ -124,54 +119,21 @@ static unsigned long limits_mitigation_notify(struct cpufreq_qcom *c,
 	struct cpufreq_policy *policy;
 	u32 cpu;
 	unsigned long freq;
-	unsigned long max_capacity, capacity;
-#if IS_ENABLED(CONFIG_PIXEL_EM)
-	struct pixel_em_profile **profile_ptr_snapshot, *profile = NULL;
-	struct pixel_em_cluster *em_cluster;
-	int i;
-#endif
-
-	cpu = cpumask_first(&c->related_cpus);
-	policy = cpufreq_cpu_get_raw(cpu);
-	capacity = max_capacity = arch_scale_cpu_capacity(cpu);
 
 	if (limit) {
 		freq = readl_relaxed(c->base + offsets[REG_DOMAIN_STATE]) &
 				GENMASK(7, 0);
 		freq = DIV_ROUND_CLOSEST_ULL(freq * xo_rate, 1000);
-		if (policy) {
-#if IS_ENABLED(CONFIG_PIXEL_EM)
-			profile_ptr_snapshot = READ_ONCE(cpufreq_hw_pixel_em_profile);
-
-			if (profile_ptr_snapshot)
-				profile = READ_ONCE(*profile_ptr_snapshot);
-
-			if (profile) {
-				em_cluster = profile->cpu_to_cluster[cpu];
-				for (i = 0; i < em_cluster->num_opps - 1; i++) {
-					if (em_cluster->opps[i].freq >= policy->max)
-						break;
-				}
-				capacity = em_cluster->opps[i].capacity;
-			} else {
-				capacity = freq * max_capacity;
-				capacity /= policy->cpuinfo.max_freq;
-			}
-#else
-			capacity = freq * max_capacity;
-			capacity /= policy->cpuinfo.max_freq;
-#endif
-		}
 	} else {
+		cpu = cpumask_first(&c->related_cpus);
+		policy = cpufreq_cpu_get_raw(cpu);
 		if (!policy)
 			freq = U32_MAX;
 		else
 			freq = policy->cpuinfo.max_freq;
 	}
 
-	arch_set_thermal_pressure(&c->related_cpus, max_t(unsigned long, 0,
-				  max_capacity - capacity));
-
+	sched_update_cpu_freq_min_max(&c->related_cpus, 0, freq);
 	trace_dcvsh_freq(cpumask_first(&c->related_cpus), freq);
 	c->dcvsh_freq_limit = freq;
 
@@ -193,7 +155,7 @@ static void limits_dcvsh_poll(struct work_struct *work)
 
 	dcvsh_freq = qcom_cpufreq_hw_get(cpu);
 
-	if (freq_limit < dcvsh_freq) {
+	if (freq_limit != dcvsh_freq) {
 		mod_delayed_work(system_highpri_wq, &c->freq_poll_work,
 				msecs_to_jiffies(LIMITS_POLLING_DELAY_MS));
 	} else {
@@ -234,6 +196,43 @@ static irqreturn_t dcvsh_handle_isr(int irq, void *data)
 	mutex_unlock(&c->dcvsh_lock);
 
 	return IRQ_HANDLED;
+}
+
+static u64 qcom_cpufreq_get_cpu_cycle_counter(int cpu)
+{
+	struct cpufreq_counter *cpu_counter;
+	struct cpufreq_policy *policy;
+	u64 cycle_counter_ret;
+	unsigned long flags;
+	u16 offset;
+	u32 val;
+
+	policy = cpufreq_cpu_get_raw(cpu);
+	if (!policy)
+		return 0;
+
+	cpu_counter = &qcom_cpufreq_counter[cpu];
+	spin_lock_irqsave(&cpu_counter->lock, flags);
+
+	offset = CYCLE_CNTR_OFFSET(cpu, policy->related_cpus,
+					accumulative_counter);
+	val = readl_relaxed_no_log(policy->driver_data +
+				    offsets[REG_CYCLE_CNTR] + offset);
+
+	if (val < cpu_counter->prev_cycle_counter) {
+		/* Handle counter overflow */
+		cpu_counter->total_cycle_counter += UINT_MAX -
+			cpu_counter->prev_cycle_counter + val;
+		cpu_counter->prev_cycle_counter = val;
+	} else {
+		cpu_counter->total_cycle_counter += val -
+			cpu_counter->prev_cycle_counter;
+		cpu_counter->prev_cycle_counter = val;
+	}
+	cycle_counter_ret = cpu_counter->total_cycle_counter;
+	spin_unlock_irqrestore(&cpu_counter->lock, flags);
+
+	return cycle_counter_ret;
 }
 
 static int
@@ -323,7 +322,7 @@ static int qcom_cpufreq_hw_cpu_init(struct cpufreq_policy *policy)
 	policy->fast_switch_possible = true;
 	policy->dvfs_possible_from_any_cpu = true;
 
-	dev_pm_opp_of_register_em(cpu_dev, policy->cpus);
+	dev_pm_opp_of_register_em(policy->cpus);
 
 	if (c->dcvsh_irq > 0 && !c->is_irq_requested) {
 		snprintf(c->dcvsh_irq_name, sizeof(c->dcvsh_irq_name),
@@ -471,8 +470,11 @@ static int qcom_cpufreq_hw_read_lut(struct platform_device *pdev,
 		if (core_count != max_cores)
 			c->table[i].flags  = CPUFREQ_BOOST_FREQ;
 
-		/* Two of the same frequencies means end of table. */
-		if (i > 0 && prev_freq == freq)
+		/*
+		 * Two of the same frequencies with the same core counts means
+		 * end of table.
+		 */
+		if (i > 0 && prev_freq == freq && prev_cc == core_count)
 			break;
 
 		prev_cc = core_count;
@@ -608,7 +610,7 @@ static int qcom_cpu_resources_init(struct platform_device *pdev,
 		c->dcvsh_irq = of_irq_get(dev->of_node, index);
 		if (c->dcvsh_irq > 0) {
 			mutex_init(&c->dcvsh_lock);
-			INIT_DELAYED_WORK(&c->freq_poll_work,
+			INIT_DEFERRABLE_WORK(&c->freq_poll_work,
 					limits_dcvsh_poll);
 		}
 	}
@@ -676,7 +678,10 @@ static int qcom_resources_init(struct platform_device *pdev)
 
 static int qcom_cpufreq_hw_driver_probe(struct platform_device *pdev)
 {
-	int rc;
+	struct cpu_cycle_counter_cb cycle_counter_cb = {
+		.get_cpu_cycle_counter = qcom_cpufreq_get_cpu_cycle_counter,
+	};
+	int rc, cpu;
 
 	/* Get the bases of cpufreq for domains */
 	rc = qcom_resources_init(pdev);
@@ -688,6 +693,15 @@ static int qcom_cpufreq_hw_driver_probe(struct platform_device *pdev)
 	rc = cpufreq_register_driver(&cpufreq_qcom_hw_driver);
 	if (rc) {
 		dev_err(&pdev->dev, "CPUFreq HW driver failed to register\n");
+		return rc;
+	}
+
+	for_each_possible_cpu(cpu)
+		spin_lock_init(&qcom_cpufreq_counter[cpu].lock);
+
+	rc = register_cpu_cycle_counter_cb(&cycle_counter_cb);
+	if (rc) {
+		dev_err(&pdev->dev, "cycle counter cb failed to register\n");
 		return rc;
 	}
 

@@ -514,7 +514,7 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 
 	reqprot = prot;
 
-	if (mmap_write_lock_killable(current->mm))
+	if (down_write_killable(&current->mm->mmap_sem))
 		return -EINTR;
 
 	/*
@@ -579,12 +579,6 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 			goto out;
 		}
 
-		/* Allow architectures to sanity-check the new flags */
-		if (!arch_validate_flags(newflags)) {
-			error = -EINVAL;
-			goto out;
-		}
-
 		error = security_file_mprotect(vma, reqprot, prot);
 		if (error)
 			goto out;
@@ -610,7 +604,7 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 		prot = reqprot;
 	}
 out:
-	mmap_write_unlock(current->mm);
+	up_write(&current->mm->mmap_sem);
 	return error;
 }
 

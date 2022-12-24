@@ -1268,6 +1268,7 @@ geni_i2c_txn_ret:
 		pm_runtime_mark_last_busy(gi2c->dev);
 		pm_runtime_put_autosuspend(gi2c->dev);
 	}
+
 	gi2c->cur = NULL;
 	GENI_SE_DBG(gi2c->ipcl, false, gi2c->dev,
 		"i2c txn ret:%d, num:%d, err:%d\n", ret, num, gi2c->err);

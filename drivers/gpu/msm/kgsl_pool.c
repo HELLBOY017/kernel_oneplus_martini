@@ -155,25 +155,6 @@ static int kgsl_pool_size_total(void)
 	return total;
 }
 
-/* Returns the total number of pages in all pools excluding reserved pages */
-static unsigned long kgsl_pool_size_nonreserved(void)
-{
-	int i;
-	unsigned long total = 0;
-
-	for (i = 0; i < kgsl_num_pools; i++) {
-		struct kgsl_page_pool *pool = &kgsl_pools[i];
-
-		spin_lock(&pool->list_lock);
-		if (pool->page_count > pool->reserved_pages)
-			total += (pool->page_count - pool->reserved_pages) *
-					(1 << pool->pool_order);
-		spin_unlock(&pool->list_lock);
-	}
-
-	return total;
-}
-
 /*
  * Returns a page from specified pool only if pool
  * currently holds more number of pages than reserved
@@ -354,7 +335,7 @@ static gfp_t kgsl_gfp_mask(int page_order)
  */
 static bool kgsl_pool_available(unsigned int page_size)
 {
-	int order = get_order(page_size);
+	int order = ilog2(page_size >> PAGE_SHIFT);
 
 	if (!kgsl_num_pools)
 		return true;
@@ -571,21 +552,15 @@ kgsl_pool_shrink_scan_objects(struct shrinker *shrinker,
 					struct shrink_control *sc)
 {
 	/* sc->nr_to_scan represents number of pages to be removed*/
-	unsigned long pcount = kgsl_pool_reduce(sc->nr_to_scan, false);
-
-	/* If pools are exhausted return SHRINK_STOP */
-	return pcount ? pcount : SHRINK_STOP;
+	return kgsl_pool_reduce(sc->nr_to_scan, false);
 }
 
 static unsigned long
 kgsl_pool_shrink_count_objects(struct shrinker *shrinker,
 					struct shrink_control *sc)
 {
-	/*
-	 * Return non-reserved pool size as we don't
-	 * want shrinker to free reserved pages.
-	 */
-	return kgsl_pool_size_nonreserved();
+	/* Return total pool size as everything in pool can be freed */
+	return kgsl_pool_size_total();
 }
 
 /* Shrinker callback data*/
@@ -625,7 +600,7 @@ static int kgsl_of_parse_mempool(struct kgsl_page_pool *pool,
 	if (of_property_read_u32(node, "qcom,mempool-page-size", &size))
 		return -EINVAL;
 
-	order = get_order(size);
+	order = ilog2(size >> PAGE_SHIFT);
 
 	if (order > 8) {
 		pr_err("kgsl: %pOF: pool order %d is too big\n", node, order);

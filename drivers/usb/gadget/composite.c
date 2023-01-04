@@ -23,7 +23,7 @@
 
 #include "u_os_desc.h"
 
-#ifdef CONFIG_OPLUS_FEATURE_CHG_BASIC
+#ifdef OPLUS_FEATURE_CHG_BASIC
 static bool enable_l1_for_hs;
 module_param(enable_l1_for_hs, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(enable_l1_for_hs, "Enable support for L1 LPM for HS devices");
@@ -174,21 +174,21 @@ int config_ep_by_speed_and_alt(struct usb_gadget *g,
 	/* select desired speed */
 	switch (g->speed) {
 	case USB_SPEED_SUPER_PLUS:
-		if (gadget_is_superspeed_plus(g)) {
+		if (gadget_is_superspeed_plus(g) && f->ssp_descriptors != NULL) {
 			speed_desc = f->ssp_descriptors;
 			want_comp_desc = 1;
 			break;
 		}
 		/* fall through */
 	case USB_SPEED_SUPER:
-		if (gadget_is_superspeed(g)) {
+		if (gadget_is_superspeed(g) && f->ss_descriptors != NULL) {
 			speed_desc = f->ss_descriptors;
 			want_comp_desc = 1;
 			break;
 		}
 		/* fall through */
 	case USB_SPEED_HIGH:
-		if (gadget_is_dualspeed(g)) {
+		if (gadget_is_dualspeed(g) && f->hs_descriptors != NULL) {
 			speed_desc = f->hs_descriptors;
 			break;
 		}
@@ -1745,7 +1745,7 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 			cdev->desc.bMaxPacketSize0 =
 				cdev->gadget->ep0->maxpacket;
 			if (gadget_is_superspeed(gadget)) {
-#ifdef CONFIG_OPLUS_FEATURE_CHG_BASIC
+#ifdef OPLUS_FEATURE_CHG_BASIC
 				if (gadget->speed >= USB_SPEED_SUPER) {
 					cdev->desc.bcdUSB = cpu_to_le16(0x0320);
 					cdev->desc.bMaxPacketSize0 = 9;
@@ -1799,7 +1799,7 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 				value = min(w_length, (u16) value);
 			break;
 		case USB_DT_BOS:
-#ifdef CONFIG_OPLUS_FEATURE_CHG_BASIC
+#ifdef OPLUS_FEATURE_CHG_BASIC
 			if ((gadget_is_superspeed(gadget) && (gadget->speed >= USB_SPEED_SUPER)) ||
 #else
 			if (gadget_is_superspeed(gadget) ||
@@ -2026,7 +2026,7 @@ unknown:
 					break;
 				interface = w_value & 0xFF;
 				if (interface >= MAX_CONFIG_INTERFACES ||
-				    !os_desc_cfg->interface[interface])
+					!os_desc_cfg->interface[interface])
 					break;
 				buf[6] = w_index;
 				count = count_ext_prop(os_desc_cfg,

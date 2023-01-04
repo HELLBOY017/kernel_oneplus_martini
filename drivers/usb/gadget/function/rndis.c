@@ -63,8 +63,6 @@ MODULE_PARM_DESC (rndis_debug, "enable debugging");
 
 static DEFINE_IDA(rndis_ida);
 
-static DEFINE_SPINLOCK(resp_lock);
-
 /* Driver Version */
 static const __le32 rndis_driver_version = cpu_to_le32(1);
 
@@ -74,7 +72,7 @@ static rndis_resp_t *rndis_add_response(struct rndis_params *params,
 
 #ifdef CONFIG_USB_GADGET_DEBUG_FILES
 
-static const struct proc_ops rndis_proc_ops;
+static const struct file_operations rndis_proc_fops;
 
 #endif /* CONFIG_USB_GADGET_DEBUG_FILES */
 
@@ -642,9 +640,8 @@ static int rndis_set_response(struct rndis_params *params,
 	BufLength = le32_to_cpu(buf->InformationBufferLength);
 	BufOffset = le32_to_cpu(buf->InformationBufferOffset);
 	if ((BufLength > RNDIS_MAX_TOTAL_SIZE) ||
-	    (BufOffset > RNDIS_MAX_TOTAL_SIZE) ||
-	    (BufOffset + 8 >= RNDIS_MAX_TOTAL_SIZE))
-		    return -EINVAL;
+		(BufOffset + 8 >= RNDIS_MAX_TOTAL_SIZE))
+			return -EINVAL;
 
 	r = rndis_add_response(params, sizeof(rndis_set_cmplt_type));
 	if (!r)
@@ -908,7 +905,7 @@ struct rndis_params *rndis_register(void (*resp_avail)(void *v), void *v)
 
 		sprintf(name, NAME_TEMPLATE, i);
 		proc_entry = proc_create_data(name, 0660, NULL,
-					      &rndis_proc_ops, params);
+					      &rndis_proc_fops, params);
 		if (!proc_entry) {
 			kfree(params);
 			rndis_put_nr(i);
@@ -1018,14 +1015,12 @@ void rndis_free_response(struct rndis_params *params, u8 *buf)
 {
 	rndis_resp_t *r, *n;
 
-	spin_lock(&resp_lock);
 	list_for_each_entry_safe(r, n, &params->resp_queue, list) {
 		if (r->buf == buf) {
 			list_del(&r->list);
 			kfree(r);
 		}
 	}
-	spin_unlock(&resp_lock);
 }
 EXPORT_SYMBOL_GPL(rndis_free_response);
 
@@ -1035,17 +1030,14 @@ u8 *rndis_get_next_response(struct rndis_params *params, u32 *length)
 
 	if (!length) return NULL;
 
-	spin_lock(&resp_lock);
 	list_for_each_entry_safe(r, n, &params->resp_queue, list) {
 		if (!r->send) {
 			r->send = 1;
 			*length = r->length;
-			spin_unlock(&resp_lock);
 			return r->buf;
 		}
 	}
 
-	spin_unlock(&resp_lock);
 	return NULL;
 }
 EXPORT_SYMBOL_GPL(rndis_get_next_response);
@@ -1062,9 +1054,7 @@ static rndis_resp_t *rndis_add_response(struct rndis_params *params, u32 length)
 	r->length = length;
 	r->send = 0;
 
-	spin_lock(&resp_lock);
 	list_add_tail(&r->list, &params->resp_queue);
-	spin_unlock(&resp_lock);
 	return r;
 }
 
@@ -1177,12 +1167,13 @@ static int rndis_proc_open(struct inode *inode, struct file *file)
 	return single_open(file, rndis_proc_show, PDE_DATA(inode));
 }
 
-static const struct proc_ops rndis_proc_ops = {
-	.proc_open	= rndis_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
-	.proc_write	= rndis_proc_write,
+static const struct file_operations rndis_proc_fops = {
+	.owner		= THIS_MODULE,
+	.open		= rndis_proc_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+	.write		= rndis_proc_write,
 };
 
 #define	NAME_TEMPLATE "driver/rndis-%03d"
